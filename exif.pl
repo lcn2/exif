@@ -2,9 +2,9 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision$
-# @(#) $Id$
-# @(#) $Source$
+# @(#) $Revision: 1.1 $
+# @(#) $Id: exif.pl,v 1.1 2005/05/04 07:33:05 chongo Exp chongo $
+# @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -72,7 +72,7 @@ my $help = qq{$usage
 		\%d day [01-31]		\%D \%m/\%d/\%y
 		\%e dat [ 1-31]		\%E locale modifier for cCxXyY
 					\%F \%Y-\%m-\%d (ISO 8601)
-		\%g XXX			\%G XXX
+		\%g 2 digit year of \%V\t\%G 4 digit year of \%V
 		\%h == \%b		\%H hour [00-23]
 					\%I hour [01-12]
 		\%j day of year [001-366]
