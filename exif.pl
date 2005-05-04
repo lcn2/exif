@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.4 $
-# @(#) $Id: exif.pl,v 1.4 2005/05/04 14:49:24 chongo Exp chongo $
+# @(#) $Revision: 1.5 $
+# @(#) $Id: exif.pl,v 1.5 2005/05/04 15:00:35 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,14 +34,14 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_n $opt_m $opt_g $opt_u $opt_b $opt_p @opt_t
+use vars qw($opt_n $opt_m $opt_g $opt_i $opt_u $opt_b $opt_p @opt_t
 	    $opt_d $opt_e $opt_f $opt_h $opt_v);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.4 $, 10;
+my $VERSION = substr q$Revision: 1.5 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -51,13 +51,14 @@ my %expand;	# $expand{$i} is either $i or %xx hex expansion
 # usage and help
 #
 my $usage =
-    "$0 [-n][-m][-g] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
+    "$0 [-n][-m][-g][-i] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
     "\t\t[-f fmt] [-h][-v lvl] imgfile";
 my $help = qq{$usage
 
 	-n	output EXIF tag name before value (default: don't)
 	-m	output EXIF tag name instead of value (default: don't)
 	-g	output EXIF tag group before EXIF tag value (default: don't)
+	-i	output imgfile filename at start of line (default: don't)
 
 	-u	output unknown EXIF tags (default: don't)
 	-b	output binary values (implies -p) (default: print binary len)
@@ -100,7 +101,7 @@ my $help = qq{$usage
 	-h	print this help message
 	-v 	verbose / debug level
 
-	[tag ...]	only output the selected EXIF tags - XXX write code
+	imgfile ...	files to look for EXIF data
 
     NOTE:
 	exit 0	all is OK
@@ -112,6 +113,7 @@ my %optctl = (
     "n" => \$opt_n,
     "m" => \$opt_m,
     "g" => \$opt_g,
+    "i" => \$opt_i,
 
     "u" => \$opt_u,
     "b" => \$opt_b,
@@ -138,7 +140,7 @@ sub error($$);
 # setup
 #
 MAIN: {
-    my $imgname;	# image filename containing EXIF data
+    my $filename;	# image filename containing EXIF data
     my $exiftool;	# Image::ExifTool object
     my %exifoptions;	# EXIF extraction options (see Image::ExifTool doc)
     my $info;		# exiftool extracted EXIF information
@@ -171,10 +173,10 @@ MAIN: {
     if (! defined $ARGV[0]) {
 	error(4, "missing filename\nusage:\n\t$help");
     }
-    $imgname = $ARGV[0];
+    $filename = $ARGV[0];
     shift @ARGV;
-    if (! -r $imgname) {
-	error(5, "cannot read: $imgname");
+    if (! -r $filename) {
+	error(5, "cannot read: $filename");
     }
     # -b determines if we extract large binary EXIF tags and implies -p
     $exifoptions{Binary} = (defined $opt_b ? 1 : 0);
@@ -198,9 +200,9 @@ MAIN: {
 
     # extract meta information from an image
     #
-    $info = $exiftool->ImageInfo($imgname, @opt_t);
+    $info = $exiftool->ImageInfo($filename, @opt_t);
     if (! defined $info) {
-	error(6, "failed to extract EXIF data from $imgname");
+	error(6, "failed to extract EXIF data from $filename");
     }
     if (defined $$info{Error}) {
 	# NOTE: exit(2) on ExifTool errors
@@ -211,7 +213,7 @@ MAIN: {
     #
     @tag_list = $exiftool->GetFoundTags('File');
     if (scalar @tag_list <= 0) {
-	error(6, "no EXIF tags found in $imgname");
+	error(6, "no EXIF tags found in $filename");
     }
 
     # Determine the canonical EXIF tag name of each EXIF tag found
@@ -231,8 +233,12 @@ MAIN: {
 
     # dump all EXIF information
     #
-    print "EXIF data for $imgname\n" if $opt_v >= 2;
+    print "EXIF data for $filename\n" if $opt_v >= 2;
     foreach $tag (@tag_list) {
+
+    	# output image filename first if -i
+	#
+	print "$filename\t" if defined $opt_i;
 
     	# determine canonical name of this tag
 	#
