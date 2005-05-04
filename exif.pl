@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.6 $
-# @(#) $Id: exif.pl,v 1.6 2005/05/04 15:07:42 chongo Exp chongo $
+# @(#) $Revision: 1.7 $
+# @(#) $Id: exif.pl,v 1.7 2005/05/04 15:11:48 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -41,7 +41,7 @@ use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.6 $, 10;
+my $VERSION = substr q$Revision: 1.7 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -52,7 +52,7 @@ my %expand;	# $expand{$i} is either $i or %xx hex expansion
 #
 my $usage =
     "$0 [-n][-m][-g][-i] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
-    "\t\t[-f fmt] [-h][-v lvl] imgfile";
+    "\t\t[-f fmt] [-h][-v lvl] imgfile ...";
 my $help = qq{$usage
 
 	-n	output EXIF tag name before value (default: don't)
@@ -68,7 +68,7 @@ my $help = qq{$usage
 	-e	output ExitTool tag names (defailt: output canonical names)
 
 	-t tag	only just EXIF tag (default: output any tag (see also -u))
-		    (NOTE: multiple -t tabs are allowed)
+		    (NOTE: multiple -t tags are allowed)
 
 	-f fmt	format for date related strings (default: \%F \%T)
 		\%a short weekday name	\%A full weekday name
@@ -106,8 +106,9 @@ my $help = qq{$usage
     NOTE:
 	exit 0	all is OK
 	exit 1	problems were encountered while extracting EXIF info
-	exit 2	fatal error during EXIF processing
-	exit >2 some other fatal error
+	exit 2	cannot open or read filename
+	exit 3	fatal error during EXIF processing
+	exit >3 some other fatal error
 };
 my %optctl = (
     "n" => \$opt_n,
@@ -133,8 +134,8 @@ my %optctl = (
 
 # function prototypes
 #
+sub exif($$);
 sub printable_str($);
-sub error($$);
 
 
 # setup
@@ -143,13 +144,9 @@ MAIN: {
     my $filename;	# image filename containing EXIF data
     my $exiftool;	# Image::ExifTool object
     my %exifoptions;	# EXIF extraction options (see Image::ExifTool doc)
-    my $info;		# exiftool extracted EXIF information
-    my @tag_list;	# list of extracted EXIF field tag names
-    my %canon_tag;	# map of canonical EFIF tag names to extracted names
-    my $tag;		# an EXIF extracted field tag name
-    my $canon;		# canonical value of tag name
-    my $value;		# the value an EXIF extracted tag field
-    my $description;	# description of an EXIF field
+    my $exifcode;	# exif() return code, 0 ==> OK, >0 ==> error
+    my $exitcode;	# what to exit with, 0 ==> all files OK, >0 ==> errors
+    my $error_msg;	# fatal error message, or undef ==> no error
 
     # setup
     #
@@ -163,20 +160,17 @@ MAIN: {
     # parse args
     #
     if (!GetOptions(%optctl)) {
-	error(3, "invalid command line\nusage:\n\t$help");
+	print STDERR "$0: invalid command line\nusage:\n\t$help\n";
+	exit(4);
     }
     if (defined $opt_h) {
 	# just print help, no error
-	print STDERR "usage: $help";
+	print STDERR "$0: usage: $help\n";
 	exit(0);
     }
     if (! defined $ARGV[0]) {
-	error(4, "missing filename\nusage:\n\t$help");
-    }
-    $filename = $ARGV[0];
-    shift @ARGV;
-    if (! -r $filename) {
-	error(5, "cannot read: $filename");
+	print STDERR "$0: missing filename\nusage:\n\t$help\n";
+	exit(5);
     }
     # -b determines if we extract large binary EXIF tags and implies -p
     $exifoptions{Binary} = (defined $opt_b ? 1 : 0);
@@ -198,22 +192,113 @@ MAIN: {
     #
     $exiftool->Options(%exifoptions);
 
+    # process each file
+    #
+    $exitcode = 0;
+    while (defined($filename = shift @ARGV)) {
+	($exifcode, $error_msg) = exif($exiftool, $filename);
+	# report errors as they happen but don't exit
+	if (defined $error_msg) {
+	    if ($exifcode > 1) {
+		print STDERR "$0: Error: $filename: $error_msg\n";
+	    } else {
+		print STDERR "$0: warning: $filename: $error_msg\n";
+	    }
+	}
+	# track the highest exit code
+	$exitcode = $exifcode if ($exifcode > $exitcode);
+    }
+
+    # All done! -- Jessica Noll, Age 2
+    #
+    exit($exitcode);
+}
+
+
+# exif - process EXIF data in an imgfile
+#
+# given:
+#	$exiftool	Image::ExifTool object
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
+#	    $message:	error message or undef if no error
+#
+sub exif($$)
+{
+    my ($exiftool, $filename) = @_;	# get arg
+    my $info;		# exiftool extracted EXIF information
+    my @tag_list;	# list of extracted EXIF field tag names
+    my %canon_tag;	# map of canonical EFIF tag names to extracted names
+    my $tag;		# an EXIF extracted field tag name
+    my $canon;		# canonical value of tag name
+    my $value;		# the value an EXIF extracted tag field
+    my $description;	# description of an EXIF field
+    my $need_pr_name;	# if -i, 1 ==> need to print filename, 0 ==> printed
+
+    # firewall - image file must be readable
+    #
+    if (! -e $filename) {
+	# NOTE: exit(2) for unable to open filename
+	return(2, "cannot open");
+    }
+    if (! -r $filename) {
+	# NOTE: exit(2) for unable to read filename
+	return(2, "cannot read");
+    }
+
     # extract meta information from an image
     #
     $info = $exiftool->ImageInfo($filename, @opt_t);
     if (! defined $info) {
-	error(6, "failed to extract EXIF data from $filename");
+	return(7, "failed to extract EXIF data from $filename");
     }
     if (defined $$info{Error}) {
-	# NOTE: exit(2) on ExifTool errors
-	error(2, "FATAL: $$info{Error}");
+	# NOTE: exit(3) on ExifTool errors
+	return(3, $$info{Error});
     }
 
     # get list of tags in the order that tags were found in the file
     #
     @tag_list = $exiftool->GetFoundTags('File');
     if (scalar @tag_list <= 0) {
-	error(6, "no EXIF tags found in $filename");
+	return(8, "no EXIF tags found in $filename");
+    }
+
+    # Determine the canonical EXIF tag name of each EXIF tag found
+    #
+    # Because of a bug(?) / mis-feature in Image::ExifTool (at least as of
+    # version 5.05) a tag such as Compression might show up 3 times as:
+    #
+    #		Compression
+    #		Compression (1)
+    #		Compression (2)
+    #
+    # In each case the canonical EXIF tag name should be just Compression.
+    #
+    if (! -r $filename) {
+	# NOTE: exit(2) for unable to read filename
+	return(2, "cannot read");
+    }
+
+    # extract meta information from an image
+    #
+    $info = $exiftool->ImageInfo($filename, @opt_t);
+    if (! defined $info) {
+	return(7, "failed to extract EXIF data from $filename");
+    }
+    if (defined $$info{Error}) {
+	# NOTE: exit(3) on ExifTool errors
+	return(3, $$info{Error});
+    }
+
+    # get list of tags in the order that tags were found in the file
+    #
+    @tag_list = $exiftool->GetFoundTags('File');
+    if (scalar @tag_list <= 0) {
+	return(8, "no EXIF tags found in $filename");
     }
 
     # Determine the canonical EXIF tag name of each EXIF tag found
@@ -235,10 +320,6 @@ MAIN: {
     #
     print "EXIF data for $filename\n" if $opt_v >= 2;
     foreach $tag (@tag_list) {
-
-    	# output image filename first if -i
-	#
-	print "$filename\t" if defined $opt_i;
 
     	# determine canonical name of this tag
 	#
@@ -270,18 +351,25 @@ MAIN: {
 
 	# output the canonical EXIF field tag name if -n
 	#
+	$need_pr_name = 1;	# no filename printed yet
 	if (defined $opt_n || defined $opt_m) {
+	    print "$filename\t" if (defined $opt_i && $need_pr_name);
+	    $need_pr_name = 0;
 	    printf("%-31s\t", (defined $opt_e ? $tag : $canon));
 	}
 
 	# output the EXIF field group if -g
 	#
 	if (defined $opt_g) {
+	    print "$filename\t" if (defined $opt_i && $need_pr_name);
+	    $need_pr_name = 0;
 	    printf("%-15s\t", $exiftool->GetGroup($tag));
 	}
 
 	# output EXIF tag value
 	#
+	print "$filename\t" if (defined $opt_i && $need_pr_name);
+	$need_pr_name = 0;
 	if (defined $opt_m) {
 	    # -m disables printing of EXIT tag values
 	    print "\n";
@@ -310,13 +398,16 @@ MAIN: {
 	}
     }
 
-    # All done! -- Jessica Noll, Age 2
+    # check for warnings
     #
     if (defined $$info{Warning}) {
-	# NOTE: exit(1) on ExifTool warnings after processing
-	error(1, "warning: $$info{Warning}");
+	# NOTE: exit(1) on ExifTool warnings
+	return(1, $$info{Warning});
     }
-    exit(0);
+
+    # all if ok
+    #
+    return(0, undef);
 }
 
 
@@ -372,37 +463,4 @@ sub printable_str($)
 	}
     }
     return $str;
-}
-
-
-# error - report an error and exit
-#
-# given:
-#       $exitval	exit code value
-#       $msg		the message to print
-#
-sub error($$)
-{
-    my ($exitval, $msg) = @_;    # get args
-
-    # parse args
-    #
-    if (!defined $exitval) {
-	$exitval = 254;
-    }
-    if (!defined $msg) {
-	$msg = "<<< no message supplied >>>";
-    }
-    if ($exitval =~ /\D/) {
-	$msg .= "<<< non-numeric exit code: $exitval >>>";
-	$exitval = 253;
-    }
-
-    # issue the error message
-    #
-    print STDERR "$0: $msg\n";
-
-    # issue an error message
-    #
-    exit($exitval);
 }
