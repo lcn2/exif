@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.5 $
-# @(#) $Id: exif.pl,v 1.5 2005/05/04 15:00:35 chongo Exp chongo $
+# @(#) $Revision: 1.6 $
+# @(#) $Id: exif.pl,v 1.6 2005/05/04 15:07:42 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -41,7 +41,7 @@ use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.5 $, 10;
+my $VERSION = substr q$Revision: 1.6 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -271,13 +271,13 @@ MAIN: {
 	# output the canonical EXIF field tag name if -n
 	#
 	if (defined $opt_n || defined $opt_m) {
-	    printf("%-28s", (defined $opt_e ? $tag : $canon));
+	    printf("%-31s\t", (defined $opt_e ? $tag : $canon));
 	}
 
 	# output the EXIF field group if -g
 	#
 	if (defined $opt_g) {
-	    printf("%-16s", $exiftool->GetGroup($tag));
+	    printf("%-15s\t", $exiftool->GetGroup($tag));
 	}
 
 	# output EXIF tag value
