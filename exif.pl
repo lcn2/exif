@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.3 $
-# @(#) $Id: exif.pl,v 1.3 2005/05/04 07:57:18 chongo Exp chongo $
+# @(#) $Revision: 1.4 $
+# @(#) $Id: exif.pl,v 1.4 2005/05/04 14:49:24 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,14 +34,14 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_n $opt_m $opt_g $opt_u $opt_b $opt_p
+use vars qw($opt_n $opt_m $opt_g $opt_u $opt_b $opt_p @opt_t
 	    $opt_d $opt_e $opt_f $opt_h $opt_v);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.3 $, 10;
+my $VERSION = substr q$Revision: 1.4 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -51,8 +51,8 @@ my %expand;	# $expand{$i} is either $i or %xx hex expansion
 # usage and help
 #
 my $usage =
-    "$0 [-n][-m][-g] [-u][-b][-p] [-d][-e]\n" .
-    "\t\t[-f fmt] [-h][-v lvl] imgfile [tag ...]";
+    "$0 [-n][-m][-g] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
+    "\t\t[-f fmt] [-h][-v lvl] imgfile";
 my $help = qq{$usage
 
 	-n	output EXIF tag name before value (default: don't)
@@ -65,6 +65,9 @@ my $help = qq{$usage
 
 	-d	output duplicate EXIF tag names (default: don't)
 	-e	output ExitTool tag names (defailt: output canonical names)
+
+	-t tag	only just EXIF tag (default: output any tag (see also -u))
+		    (NOTE: multiple -t tabs are allowed)
 
 	-f fmt	format for date related strings (default: \%F \%T)
 		\%a short weekday name	\%A full weekday name
@@ -116,6 +119,8 @@ my %optctl = (
 
     "d" => \$opt_d,
     "e" => \$opt_e,
+
+    "t=s" => \@opt_t,
 
     "f=s" => \$opt_f,
 
@@ -193,7 +198,7 @@ MAIN: {
 
     # extract meta information from an image
     #
-    $info = $exiftool->ImageInfo($imgname, @ARGV);
+    $info = $exiftool->ImageInfo($imgname, @opt_t);
     if (! defined $info) {
 	error(6, "failed to extract EXIF data from $imgname");
     }
