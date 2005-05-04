@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.1 $
-# @(#) $Id: exif.pl,v 1.1 2005/05/04 07:33:05 chongo Exp chongo $
+# @(#) $Revision: 1.2 $
+# @(#) $Id: exif.pl,v 1.2 2005/05/04 07:35:17 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -41,7 +41,7 @@ use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.1 $, 10;
+my $VERSION = substr q$Revision: 1.2 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -51,7 +51,8 @@ my %expand;	# $expand{$i} is either $i or %xx hex expansion
 # usage and help
 #
 my $usage =
-    "$0 [-n][-m][-g] [-u][-b][-p] [-d][-e] [-f fmt] [-h][-v lvl] imgfile";
+    "$0 [-n][-m][-g] [-u][-b][-p] [-d][-e]\n" .
+    "\t\t[-f fmt] [-h][-v lvl] imgfile [tag ...]";
 my $help = qq{$usage
 
 	-n	output EXIF tag name before value (default: don't)
@@ -96,6 +97,9 @@ my $help = qq{$usage
 	-h	print this help message
 	-v 	verbose / debug level
 
+	[tag ...]	only output the selected EXIF tags - XXX write code
+
+    NOTE:
 	exit 0	all is OK
 	exit 1	problems were encountered while extracting EXIF info
 	exit 2	fatal error during EXIF processing
@@ -122,7 +126,7 @@ my %optctl = (
 
 # function prototypes
 #
-sub canonical_str($);
+sub printable_str($);
 sub error($$);
 
 
@@ -152,13 +156,15 @@ MAIN: {
     # parse args
     #
     if (!GetOptions(%optctl)) {
-	error(3, "invalid command line\nusage: $help");
+	error(3, "invalid command line\nusage:\n\t$help");
     }
     if (defined $opt_h) {
-	error(0, "usage: $help");
+	# just print help, no error
+	print STDERR "usage: $help";
+	exit(0);
     }
     if (! defined $ARGV[0]) {
-	error(4, "missing filename\nusage: $help");
+	error(4, "missing filename\nusage:\n\t$help");
     }
     $imgname = $ARGV[0];
     if (! -r $imgname) {
@@ -226,7 +232,7 @@ MAIN: {
 	#
 	$canon = $canon_tag{$tag};
 
-	# binary EXIF field firewall
+	# binary EXIF tag value firewall
 	#
 	$value = $$info{$tag};
 	if (ref $value eq 'SCALAR') {
@@ -264,16 +270,17 @@ MAIN: {
 	if (defined $opt_m) {
 	    # -m disables printing of EXIT tag values
 	    print "\n";
-	} elsif (defined $opt_p) {
-	    # -p (or -b which implies -p) prints values raw
-	    print "$value\n";
-	} else {
+	} elsif (defined $opt_u && ! defined $opt_p) {
 	    # ensure that the value we print is printable
 	    #
-	    # NOTE: In some cases, unknown EXIF tags contain non-printable
-	    #	    characters even though the PrintConv is set.
+	    # NOTE: Sometimes unknown EXIF tags (-u) contain non-printable
+	    #	    characters even though the PrintConv option was set.
+	    #	    This printable string processing is not done if
+	    #	    we have turned off PrintConv (due to -p or -b).
 	    #
-	    print canonical_str($value), "\n";
+	    print printable_str($value), "\n";
+	} else {
+	    print "$value\n";
 	}
 
 	# output field description if -v is high enough
@@ -298,7 +305,7 @@ MAIN: {
 }
 
 
-# canonical_str - canonicalize the string
+# printable_str - make a string printable
 #
 # given:
 #	$str	the strign to canonicalize
@@ -306,7 +313,7 @@ MAIN: {
 # returns:
 #	$str with % as %25, [^\w\s] as %xx
 #
-sub canonical_str($)
+sub printable_str($)
 {
     my ($str) = @_;	# get arg
     my @chars;		# string chars as an array
