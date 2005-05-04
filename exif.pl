@@ -2,8 +2,8 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.2 $
-# @(#) $Id: exif.pl,v 1.2 2005/05/04 07:35:17 chongo Exp chongo $
+# @(#) $Revision: 1.3 $
+# @(#) $Id: exif.pl,v 1.3 2005/05/04 07:57:18 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -41,7 +41,7 @@ use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.2 $, 10;
+my $VERSION = substr q$Revision: 1.3 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -167,6 +167,7 @@ MAIN: {
 	error(4, "missing filename\nusage:\n\t$help");
     }
     $imgname = $ARGV[0];
+    shift @ARGV;
     if (! -r $imgname) {
 	error(5, "cannot read: $imgname");
     }
@@ -192,7 +193,7 @@ MAIN: {
 
     # extract meta information from an image
     #
-    $info = $exiftool->ImageInfo($imgname);
+    $info = $exiftool->ImageInfo($imgname, @ARGV);
     if (! defined $info) {
 	error(6, "failed to extract EXIF data from $imgname");
     }
@@ -235,7 +236,10 @@ MAIN: {
 	# binary EXIF tag value firewall
 	#
 	$value = $$info{$tag};
-	if (ref $value eq 'SCALAR') {
+	if (! defined $value) {
+	    # no such value, skip
+	    next;
+	} elsif (ref $value eq 'SCALAR') {
 	    if (defined $opt_b) {
 		$value = $$value;
 	    } else {
