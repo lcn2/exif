@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.1 $
-# @(#) $Id: exifrename.pl,v 1.1 2005/05/05 21:30:03 chongo Exp chongo $
+# @(#) $Revision: 1.2 $
+# @(#) $Id: exifrename.pl,v 1.2 2005/05/07 01:05:09 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -42,7 +42,7 @@ no warnings 'File::Find';
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.1 $, 10;
+my $VERSION = substr q$Revision: 1.2 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -53,7 +53,11 @@ my @tag_list = qw( ModifyDate DateTimeOriginal CreateDate );
 my $mintime = 750000000;
 my $srcdir;	# source of image files
 my $destdir;	# where the renamed files will be copied
+my $destdev;	# device of $destdir
+my $destino;	# inode numner of $destdir
 my $rolldir;	# $destdir/roll under where roll symlinks go
+my $rolldev;	# device of $rolldir
+my $rollino;	# inode numner of $rolldir
 my $exiftool;	# Image::ExifTool object
 
 # usage and help
@@ -121,20 +125,50 @@ MAIN: {
     }
     $srcdir = $ARGV[0];
     $destdir = $ARGV[1];
-    $rolldir = "$destdir/roll";
+
+    # setup to walk the srcdir
+    #
+    $find_opt{wanted} = \&wanted; # call this on each non-pruned node
+    $find_opt{bydepth} = 0;	# walk from top down, not from bottom up
+    $find_opt{follow} = 0;	# do not follow symlinks
+    $find_opt{no_chdir} = 0;	# OK to chdir as we walk the tree
+    $find_opt{untaint} = 1;	# untaint dirs we chdir to
+    # NOTE: We will only cd into dirs whose name is only [-+@\w./] chars
+    $find_opt{untaint_pattern} = qr|^([-+@\w./]+)$|; # untaint pattern
+    $find_opt{untaint_skip} = 1; # we will skip any dir that is tainted
+
+    # untaint $srcdir and $destdir
+    #
+    if ($srcdir =~ /$find_opt{untaint_pattern}/) {
+    	$srcdir = $1;
+    } else {
+	print STDERR "$0: bogus chars in srcdir\n";
+	exit(3);
+    }
+    if ($destdir =~ /$find_opt{untaint_pattern}/) {
+    	$destdir = $1;
+    } else {
+	print STDERR "$0: bogus chars in destdir\n";
+	exit(3);
+    }
 
     # setup directories
     #
-    setup_dir();
+    $rolldir = "$destdir/roll";
+    dir_setup();
+    # XXX - initialize roll serial number
 
     # setup ExifTool
     #
     $exiftool = exif_setup();
 
-    # setup to walk the srcdir
+    # walk the srcdir, making renamed copies and symlinks
     #
-    $find_opt{wanted} = wanted;
-    # XXX - more code here
+    find(\%find_opt, $srcdir);
+
+    # all done
+    #
+    exit(0);
 }
 
 
@@ -223,29 +257,164 @@ MAIN: {
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and symlinks in destdir.
 #
+# NOTE:
+#	$File::Find::dir	current directory name
+#	$_			current filename within $File::Find::dir
+#	$File::Find::name 	complete pathname to the file
+#	$File::Find::prune	set 1 one to prune current node out of path
+#	$File::Find::topdir	top directory path ($srcdir)
+#	$File::Find::topdev	device of the top directory
+#	$File::Find::topino	inode number of the top directory
+#
 sub wanted()
 {
+    my $filename = $_;		# current filename within $File::Find::dir
+    my $nodedev;		# device of the current file
+    my $nodeino;		# inode number of the current file
+    my $roll;			# roll path to form below $rolldir
+
+    # prune out anything that is not a directory or file
+    #
+    if (! -d $filename && ! -f $filename) {
+	# skip non-dir/non-files
+	$File::Find::prune = 1;
+	print "DEBUG: prune #0 $File::Find::name\n" if $opt_v > 1;
+	return;
+    }
+
+    # prune out destdir
+    #
+    # If we hapened to walk into our destination directory, prune
+    # as we do not want to get into a recursive copy loop.
+    #
+    ($nodedev, $nodeino, ) = stat($filename);
+    if (($nodedev == $destdev && $nodeino == $destino) ||
+        ($nodedev == $rolldev && $nodeino == $rollino)) {
+	# avoid recursion, skip walking into $destdir or $rolldir
+	$File::Find::prune = 1;
+	print "DEBUG: prune #1 $File::Find::name\n" if $opt_v > 1;
+	return;
+    }
+
+    # prune out certain top level paths
+    #
+    # As notied in detail above, we will prune off any .Trashes,
+    # .comstate.tof that are directly under $srcdir
+    #
+    if ($File::Find::name eq "$srcdir/.Trashes" ||
+        $File::Find::name eq "$srcdir/.comstate.tof") {
+	# skip this useless camera node
+	$File::Find::prune = 1;
+	print "DEBUG: prune #2 $File::Find::name\n" if $opt_v > 1;
+	return;
+    }
+
+    # prune out .DS_Store files
+    #
+    if ($filename eq ".DS_Store") {
+	# skip OS X .DS_Store files
+	$File::Find::prune = 1;
+	print "DEBUG: ignore #3 $File::Find::name\n" if $opt_v > 1;
+	return;
+    }
+
+    # ignore (but not prune) . and ..
+    #
+    if ($filename eq "." || $filename eq "..") {
+	# ignore but do not prune . and ..
+	print "DEBUG: ignore #4 $File::Find::name\n" if $opt_v > 1;
+    	return;
+    }
+
+    # If we are at /$srcdir/DCIM, then just return (don't prune)
+    # because we want to look at images below DCIM
+    #
+    if ($File::Find::name eq "$srcdir/DCIM") {
+	# ignore but do not prune /DCIM
+	print "DEBUG: ignore #5 $File::Find::name\n" if $opt_v > 1;
+    	return;
+    }
+
+    # ready to process this srcdir node
+    #
+    print "DEBUG: processing $File::Find::name\n" if $opt_v > 1;
+
+    # For a directory that we do not ignore, we will make a
+    # directory under out rolldir.  This rolldir will consist
+    # of the path under $srcdir without a top level DCIM component.
+    # For a file that we do not ignore, we will make a
+    # symlink within a directory under rolldir.
+    #
+    # That is, we will look at the path beyond $srcdir/DCIM
+    # if $File::Find::name begins with $srcdir/DCIM, otherwise
+    # we will look at the path beyond just $srcdir to determine
+    # the roll directory we need.
+    #
+    # This code sets $roll to be the path of the directory
+    # or symlink that we need to form.
+    #
+    if ($File::Find::name =~ m|^$srcdir/DCIM/(.+)$|o) {
+	$roll = "$rolldir/$1";		# path beyond $srcdir/DCIM/
+    } elsif ($File::Find::name =~ m|^$srcdir/(.+)$|o) {
+	$roll = "$rolldir/$1";		# path beyond $srcdir/
+    } else {
+	$roll = "$rolldir/$File::Find::name";	# use the full path
+    }
+
+    # directory processing
+    #
+    if (-d $filename) {
+
+	# create the roll subdir if needed
+	#
+	print "DEBUG: will try to mkdir $roll\n" if ($opt_v > 1 && ! -d $roll);
+	if (-e $roll && ! -d $roll) {
+	    print STDERR "$0: Warning: $roll exists and is not a directory\n";
+	    print STDERR "$0: We will ignore $File::Find::name for now\n";
+	    $File::Find::prune = 1;
+	    print "DEBUG: prune #6 $File::Find::name\n" if $opt_v > 1;
+	    return;
+	} elsif (! -d $roll && ! mkdir($roll, 0775)) {
+	    print STDERR "$0: Warning: cannot mkdir $roll\n";
+	    print STDERR "$0: We will ignore $File::Find::name for now\n";
+	    $File::Find::prune = 1;
+	    print "DEBUG: prune #6 $File::Find::name\n" if $opt_v > 1;
+	    return;
+	} elsif (! -w $roll) {
+	    print STDERR "$0: Warning: directory not writable: $roll\n";
+	    print STDERR "$0: We will ignore $File::Find::name for now\n";
+	    $File::Find::prune = 1;
+	    print "DEBUG: prune #6 $File::Find::name\n" if $opt_v > 1;
+	    return;
+	}
+    	return;
+    }
+
+    # file processing
+    #
+    # XXX - more code here
 }
 
 
 # dir_setup - setup and/or check on srcdir and destdir
 #
 # uses these globals:
+#
 #	$srcdir		where images are from
 #	$desdir		where copied and renamed files go
 #	$rolldir	$destdir/roll under where symlinks are formed
+#
+# sets these global values:
+#
+#	$destdev	device of $destdir
+#	$destino	inode number of $destdir
+#	$rolldev	device of $rolldir
+#	$rollino	inode number of $rolldir
 #
 # NOTE: Does not return on error.
 #
 sub dir_setup()
 {
-    # firewall - sanity check, srcdir cannot be a substring of destdir
-    #
-    if ($srcdir eq substr($destdir, 0, length $srcdir)) {
-	print STDERR "$0: destdir: $destdir cannot be under srcdir: $srcdir\n";
-	exit(6);
-    }
-
     # firewall - check for a sane srcdir
     #
     if (! -e $srcdir) {
@@ -278,6 +447,10 @@ sub dir_setup()
 	exit(13);
     }
 
+    # record the device and inode number of $destdir
+    #
+    ($destdev, $destino,) = stat($destdir);
+
     # setup the roll symlink dir if needed
     #
     if (-e $rolldir && ! -d $rolldir) {
@@ -290,6 +463,10 @@ sub dir_setup()
 	print STDERR "$0: destdir/roll is not writable: $rolldir\n";
 	exit(16);
     }
+
+    # record the device and inode number of $rolldir
+    #
+    ($rolldev, $rollino,) = stat($rolldir);
     return;
 }
 
