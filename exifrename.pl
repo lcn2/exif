@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.2 $
-# @(#) $Id: exifrename.pl,v 1.2 2005/05/07 01:05:09 chongo Exp chongo $
+# @(#) $Revision: 1.3 $
+# @(#) $Id: exifrename.pl,v 1.3 2005/05/18 23:58:49 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -42,7 +42,7 @@ no warnings 'File::Find';
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.2 $, 10;
+my $VERSION = substr q$Revision: 1.3 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -187,51 +187,74 @@ MAIN: {
 # Assume that the EXIF timestamp (or file timestamp if if lacks
 # EXIF timestamp tags) is:
 #
-#	2005-05-15
+#	2005-05-15 15:25:45 UTC
 #
 # Then we will create the file:
 #
-#	/destdir/200505/20050515-ls1f5627.cr2
+#	/destdir/2005/200505/20050515/20050515-152545-r0043-ls1f5627.cr2
 #
 # The created file path is:
 #
-#	/destdir
-#	4 digit Year of the timestamp
-#	Month [01-12] of the timestamp
-#	/
-#	4 digit Year of the timestamp
-#	Month [01-12] of the timestamp
-#   Day [01-31] of the timestamp
-#	- (dash)
-#	basename of srcfile mapped to lower case
+#	/destdir			# destdir path of image library
+#	/2005				# image year
+#	/200505				# image year & month
+#	/20050515			# image year & month & day
+#	/20050515-152545-r0043-ls1f5627.cr2	# image filename
+#
+# The directory tree /top/YYYY/YYYYMM/YYYYMMDD repeats the date down 3 levels
+# so that one can know in what date range you are dealing with at each
+# level.  If this were not done, and say you were looking at a directory
+# with 05 and 09 in it, you would not know if those were days or months
+# and under what year you are desiding.  But because they would be
+# 200505 and 200509 you know they are months and you are under year 2005.
+#
+# The filename itself:
+#
+#	20050515-152545-r0043-101eos1d-ls1f5627.cr2
+#
+# is constructed out of the following:
+#
+#	2005			# image 4 digit Year
+#	05			# image month, 2 digits [01-12]
+#	15			# image day of month, 2 digits [01-31]
+#	-			# 1st separator
+#	15			# image hour (UTC), 2 digits [00-23]
+#	25			# image minute of hour, 2 digits [00-59]
+#	45			# image second of minute, 2 digits [00-60]
+#	-			# 2nd separator
+#	r			# indicaters roll
+#	0043			# image set number, 4 or more digits
+#	-			# 3rd separator
+#	ls1f5627.cr2		# image basename, in lower case
 #
 # In addition, a symlink is setup under rolldir as follows:
 #
-#	/destdir/roll/roll-0031/101eos1d/20050515-ls1f5627.cr2 ->
-#	    ../../20050515-ls1f5627.cr2
+#	 /destdir/roll/r0043/101eos1d/20050515-152545-r0043-ls1f5627.cr2 ->
+#	../../../2005/200505/20050515/20050515-152545-r0043-ls1f5627.cr2
 #
 # Note that the symlink filename basename is the same as the destination
-# filename.  The symlink path is:
+# filename.
 #
-#	/destdir
-#	/roll
-#	/roll-WXYZ	(WXYZ is a 4 digit number)
-#	/101eos1d	(the directory path under /srcdir/DCIM lowercased)
-#	/
-#	4 digit Year of the timestamp
-#	Month [01-12] of the timestamp
-#   Day [01-31] of the timestamp
-#	- (dash)
-#	basename of srcfile mapped to lower case
+# The symlink path is:
 #
-# The WXYZ is a 4 digit serial number from the file:
+#	/destdir	# destdir path of image library
+#	/roll		# roll sub-tree within the image library
+#	/r0043		# roll number, r + 4 or more digits
+#	/101eos1d	# 1st directory under srcdir/DCIM,
+#			# or 1st directory under srcdir if no DCIM
+#			# or nothing at all if image was just under srcdir
+#			# converted to lower case
+#	# ...		# any further directories are preserved, and
+#			# converted to lower case as well
+#	/basename	# image basename
 #
-#	~/.exifnum
+# The 4 or more digit roll serial number from the file:
+#
+#	~/.exifroll
 #
 # It if initialized to 0000 if that file does not exist.  The current
-# value is used to form the roll-WXYZ path component and then is incremented
-# by 1.  If incrementing reaches 10000, it is reset to 0000.  Note that
-# the WXYZ used in the path is the value prior to incrementing.
+# value is used to form the rWXYZ path component and then is incremented
+# by 1.
 #
 # NOTE: The EOS 1D Canon Image filesystem, without any images looks like:
 #
