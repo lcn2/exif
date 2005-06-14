@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.5 $
-# @(#) $Id: exifrename.pl,v 1.5 2005/06/14 09:47:49 chongo Exp chongo $
+# @(#) $Revision: 1.6 $
+# @(#) $Id: exifrename.pl,v 1.6 2005/06/14 10:02:07 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,17 +34,18 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_h $opt_v $opt_f $opt_m);
+use vars qw($opt_h $opt_v $opt_f $opt_m $opt_t $opt_c $opt_e $opt_r);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
 use File::Find;
 no warnings 'File::Find';
 use File::Copy;
+use File::Compare;
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.5 $, 10;
+my $VERSION = substr q$Revision: 1.6 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -62,7 +63,7 @@ my $srcdir;	# source of image files
 my $destdir;	# where the renamed files will be copied
 my $destdev;	# device of $destdir
 my $destino;	# inode numner of $destdir
-my $rollnum;	# roll number
+my $rollnum;	# EXIF roll number
 my $rolldir;	# $destdir/roll under where roll symlinks go
 my $rolldev;	# device of $rolldir
 my $rollino;	# inode numner of $rolldir
@@ -70,25 +71,34 @@ my $exiftool;	# Image::ExifTool object
 
 # usage and help
 #
-my $usage = "$0 [-m][-f][-h][-v lvl] srcdir destdir";
+my $usage = "$0 [-c][-e][-f][-m][-r rollfile][-t] [-h][-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
-	-m	    move, do not copy files from srcdir to destdir
-	-f	    force overwrite of files and symlinks
-	-h	    print this help message
-	-v 	    verbose / debug level
+	-c	     don't verify/compare files after they are copied (def: do)
+	-e	     don't abort on fatal errors (def: exit)
+	-f	     force overwrite of files and symlinks (def: don't)
+	-m	     move, do not copy files from srcdir to destdir (def: copy)
+	-r rollfile  read EXIF rull number of rollfile (def: ~/.exifroll)
+	-t	     don't touch modtime to match EXIF/file image (def: do)
 
-	srcdir	    source directory
-	destdir	    destination directory
+	-h	     print this help message
+	-v 	     verbose / debug level
+
+	srcdir	     source directory
+	destdir	     destination directory
 
     NOTE:
 	exit 0	all is OK
 	exit >0 some other fatal error
 };
 my %optctl = (
-    "m" => \$opt_m,
+    "c" => \$opt_c,
+    "e" => \$opt_e,
     "f" => \$opt_f,
     "h" => \$opt_h,
+    "m" => \$opt_m,
+    "r=s" => \$opt_r,
+    "t" => \$opt_t,
     "v=i" => \$opt_v,
 );
 
@@ -101,6 +111,7 @@ sub exif_setup();
 sub exif_date($$);
 sub file_date($);
 sub form_dir($);
+sub roll_setup();
 
 
 # setup
@@ -116,25 +127,32 @@ MAIN: {
     # set the defaults
     #
     $opt_v = 0;
+    $ENV{HOME} = "/" unless defined $ENV{HOME};
+    $opt_r = "$ENV{HOME}/.exifroll";
 
     # parse args
     #
     if (!GetOptions(%optctl)) {
 	print STDERR "$0: invalid command line\nusage:\n\t$help\n";
-	exit(4);
+	exit(1);
     }
     if (defined $opt_h) {
 	# just print help, no error
 	print STDERR "$0: usage: $help\n";
 	exit(0);
     }
+    if (defined $opt_m && defined $opt_c) {
+	# cannot compare if we are moving
+	print STDERR "$0: -c (compare) conflicts with -m (move)\n";
+	exit(2);
+    }
     if (! defined $ARGV[0] || ! defined $ARGV[1]) {
 	print STDERR "$0: missing args\nusage:\n\t$help\n";
-	exit(5);
+	exit(3);
     }
     if (defined $ARGV[2]) {
 	print STDERR "$0: too many args\nusage:\n\t$help\n";
-	exit(3);
+	exit(4);
     }
     $srcdir = $ARGV[0];
     $destdir = $ARGV[1];
@@ -156,22 +174,21 @@ MAIN: {
     	$srcdir = $1;
     } else {
 	print STDERR "$0: bogus chars in srcdir\n";
-	exit(3);
+	exit(5);
     }
     if ($destdir =~ /$find_opt{untaint_pattern}/) {
     	$destdir = $1;
     } else {
 	print STDERR "$0: bogus chars in destdir\n";
-	exit(3);
+	exit(6);
     }
 
     # setup directories
     #
     $rolldir = "$destdir/roll";
     dir_setup();
-
-    # XXX - initialize roll serial number $rollnum and set $roll
-    # roll_setup();
+    # initialize roll serial number $rollnum
+    roll_setup();
 
     # setup ExifTool
     #
@@ -187,6 +204,73 @@ MAIN: {
 }
 
 
+# dir_setup - setup and/or check on srcdir and destdir
+#
+# uses these globals:
+#
+#	$srcdir		where images are from
+#	$desdir		where copied and renamed files go
+#	$rolldir	$destdir/roll under where symlinks are formed
+#
+# sets these global values:
+#
+#	$destdev	device of $destdir
+#	$destino	inode number of $destdir
+#	$rolldev	device of $rolldir
+#	$rollino	inode number of $rolldir
+#
+# NOTE: Does not return on error.
+#
+sub dir_setup()
+{
+    my ($errcode, $errmsg);	# form_dir return values
+
+    # firewall - check for a sane srcdir
+    #
+    if (! -e $srcdir) {
+	print STDERR "$0: srcdir does not exist: $srcdir\n";
+	exit(7);
+    }
+    if (! -d $srcdir) {
+	print STDERR "$0: srcdir is not a directory: $srcdir\n";
+	exit(8);
+    }
+    if (! -r $srcdir) {
+	print STDERR "$0: srcdir is not readable: $srcdir\n";
+	exit(9);
+    }
+    if (! -x $srcdir) {
+	print STDERR "$0: srcdir is not searchable: $srcdir\n";
+	exit(10);
+    }
+
+    # setup the destination directory if needed
+    #
+    ($errcode, $errmsg) = form_dir($destdir);
+    if ($errcode != 0) {
+	print STDERR "$0: mkdir error: $errmsg for $destdir\n";
+	exit(11);
+    }
+
+    # record the device and inode number of $destdir
+    #
+    ($destdev, $destino,) = stat($destdir);
+
+    # setup the roll symlink dir if needed
+    #
+    ($errcode, $errmsg) = form_dir($rolldir);
+    if ($errcode != 0) {
+	print STDERR "$0: mkdir error: $errmsg for $rolldir\n";
+	exit(12);
+    }
+
+    # record the device and inode number of $rolldir
+    #
+    ($rolldev, $rollino,) = stat($rolldir);
+    return;
+}
+
+
 # wanted - File::Find tree walking function called at each non-pruned node
 #
 # This function is a callback from the File::Find directory tree walker.
@@ -197,9 +281,16 @@ MAIN: {
 #
 # uses these globals:
 #
+#	$opt_c		see -c in program usage at top
+#	$opt_e		see -e in program usage at top
+#	$opt_f		see -f in program usage at top
+#	$opt_m		see -m in program usage at top
+#	$opt_t		see -t in program usage at top
 #	$srcdir		where images are from
 #	$desdir		where copied and renamed files go
 #	$rolldir	$destdir/roll under where symlinks are formed
+#	$rollnum	EXIF roll number
+#	$exiftool	Image::ExifTool object
 #
 # Consider the a file under srcdir:
 #
@@ -414,9 +505,10 @@ sub wanted()
 	$subpath = $1;
 	$roll = "$rolldir/$1";		# path beyond $srcdir/
     } else {
-	print STDERR "$0: Warning $pathname not under $srcdir\n";
+	print STDERR "$0: Fatal $pathname not under $srcdir\n";
 	$File::Find::prune = 1;
 	print "DEBUG: prune #6 $pathname\n" if $opt_v > 1;
+	exit(13) unless defined $opt_e;
 	return;
     }
     print "DEBUG: roll directory: $roll\n" if $opt_v > 2;
@@ -448,9 +540,10 @@ sub wanted()
 	print "DEBUG: will try to mkdir $roll\n" if ($opt_v > 1 && ! -d $roll);
 	($errcode, $errmsg) = form_dir($roll);
 	if ($errcode != 0) {
-	    print STDERR "$0: mkdir error: $errmsg for $roll\n";
+	    print STDERR "$0: Fatal: mkdir error: $errmsg for $roll\n";
 	    $File::Find::prune = 1;
 	    print "DEBUG: prune #7 $pathname\n" if $opt_v > 1;
+	    exit(14) unless defined $opt_e;
 	    return;
 	}
 
@@ -473,10 +566,11 @@ sub wanted()
 	#
 	($datecode, $datestamp) = exif_date($exiftool, $filename);
 	if ($datecode != 0) {
-	    print STDERR "$0: Warning: EXIF image timestamp error $datecode: ",
+	    print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
 	    		 "$datestamp\n";
 	    print "DEBUG: prune #8 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
+	    exit(15) unless defined $opt_e;
 	    return;
 	}
 	print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
@@ -496,26 +590,29 @@ sub wanted()
 	#
 	($errcode, $errmsg) = form_dir("$destdir/$yyyy");
 	if ($errcode != 0) {
-	    print STDERR "$0: mkdir error: $errmsg for ",
+	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy\n";
 	    $File::Find::prune = 1;
 	    print "DEBUG: prune #9 $pathname\n" if $opt_v > 1;
+	    exit(16) unless defined $opt_e;
 	    return;
 	}
 	($errcode, $errmsg) = form_dir("$destdir/$yyyy/$yyyymm");
 	if ($errcode != 0) {
-	    print STDERR "$0: mkdir error: $errmsg for ",
+	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy/$yyyymm\n";
 	    $File::Find::prune = 1;
 	    print "DEBUG: prune #10 $pathname\n" if $opt_v > 1;
+	    exit(17) unless defined $opt_e;
 	    return;
 	}
 	($errcode, $errmsg) = form_dir("$destdir/$yyyy/$yyyymm/$yyyymmdd");
 	if ($errcode != 0) {
-	    print STDERR "$0: mkdir error: $errmsg for ",
+	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy/$yyyymm/$yyyymmdd\n";
 	    $File::Find::prune = 1;
 	    print "DEBUG: prune #11 $pathname\n" if $opt_v > 1;
+	    exit(18) unless defined $opt_e;
 	    return;
 	}
 
@@ -525,31 +622,51 @@ sub wanted()
 	    print "DEBUG: dest file exists: $destdir/$filename\n" if $opt_v > 1;
 	    unlink "$destpath" if $opt_f;
 	    if (-f "$destpath") {
-		print STDERR "$0: Warning: desitnation exists: $destpath\n";
+		print STDERR "$0: Fatal: desitnation exists: $destpath\n";
 		print "DEBUG: prune #12 $pathname\n" if $opt_v > 1;
 		$File::Find::prune = 1;
+		exit(19) unless defined $opt_e;
 		return;
 	    }
 	}
 
 	# copy (or move of -m) the image file
 	#
-	if ($opt_m) {
+	if (defined $opt_m) {
 	    if (move($pathname, $destpath) == 0) {
-		print STDERR "$0: in ", $File::Find::dir, ": ",
+		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "mv $filename $destpath failed: $!\n";
 		print "DEBUG: prune #13 $pathname\n" if $opt_v > 1;
 		$File::Find::prune = 1;
+		exit(20) unless defined $opt_e;
 		return;
 	    }
 	} else {
 	    if (copy($pathname, $destpath) == 0) {
-		print STDERR "$0: in ", $File::Find::dir, ": ",
+		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "cp $filename $destpath failed: $!\n";
 		print "DEBUG: prune #14 $pathname\n" if $opt_v > 1;
 		$File::Find::prune = 1;
+		exit(21) unless defined $opt_e;
 		return;
 	    }
+	}
+
+	# compare unless -t
+	#
+	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
+	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
+			 "compare of $filename and $destpath failed\n";
+	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(22) unless defined $opt_e;
+	    return;
+	}
+
+	# set the access and modification time unless -t
+	#
+	if (! defined $opt_t) {
+	    utime $datestamp, $datestamp, $destpath;
 	}
 
 	# form the symlink
@@ -559,9 +676,10 @@ sub wanted()
 	$srcsym = ("../" x ($levels+2)) . "$yyyy/$yyyymm/$yyyymmdd/$destname";
 	$destsym = "$roll/$destname";
 	if (symlink($srcsym, $destsym) != 1) {
-	    print STDERR "$0: ln -s $srcsym $destdir failed: $!\n";
-	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 1;
+	    print STDERR "$0: Fatal: ln -s $srcsym $destdir failed: $!\n";
+	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
+	    exit(23) unless defined $opt_e;
 	    return;
 	}
 
@@ -569,77 +687,9 @@ sub wanted()
     #
     } else {
 	$File::Find::prune = 1;
-    	print "DEBUG: prune #16 $pathname: not a file or dir\n"
-	    if $opt_v > 1;
+    	print "DEBUG: prune #17 $pathname: not a file or dir\n" if $opt_v > 1;
 	return;
     }
-    return;
-}
-
-
-# dir_setup - setup and/or check on srcdir and destdir
-#
-# uses these globals:
-#
-#	$srcdir		where images are from
-#	$desdir		where copied and renamed files go
-#	$rolldir	$destdir/roll under where symlinks are formed
-#
-# sets these global values:
-#
-#	$destdev	device of $destdir
-#	$destino	inode number of $destdir
-#	$rolldev	device of $rolldir
-#	$rollino	inode number of $rolldir
-#
-# NOTE: Does not return on error.
-#
-sub dir_setup()
-{
-    my ($errcode, $errmsg);	# form_dir return values
-
-    # firewall - check for a sane srcdir
-    #
-    if (! -e $srcdir) {
-	print STDERR "$0: srcdir does not exist: $srcdir\n";
-	exit(7);
-    }
-    if (! -d $srcdir) {
-	print STDERR "$0: srcdir is not a directory: $srcdir\n";
-	exit(8);
-    }
-    if (! -r $srcdir) {
-	print STDERR "$0: srcdir is not readable: $srcdir\n";
-	exit(9);
-    }
-    if (! -x $srcdir) {
-	print STDERR "$0: srcdir is not searchable: $srcdir\n";
-	exit(10);
-    }
-
-    # setup the destination directory if needed
-    #
-    ($errcode, $errmsg) = form_dir($destdir);
-    if ($errcode != 0) {
-	print STDERR "$0: mkdir error: $errmsg for $destdir\n";
-	exit(11);
-    }
-
-    # record the device and inode number of $destdir
-    #
-    ($destdev, $destino,) = stat($destdir);
-
-    # setup the roll symlink dir if needed
-    #
-    ($errcode, $errmsg) = form_dir($rolldir);
-    if ($errcode != 0) {
-	print STDERR "$0: mkdir error: $errmsg for $rolldir\n";
-	exit(12);
-    }
-
-    # record the device and inode number of $rolldir
-    #
-    ($rolldev, $rollino,) = stat($rolldir);
     return;
 }
 
@@ -694,12 +744,12 @@ sub exif_date($$)
     # firewall - image file must be readable
     #
     if (! -e $filename) {
-	# NOTE: exit(2) for unable to open filename
-	return(1, "cannot open");
+	# NOTE: exit(24) for unable to open filename
+	return(24, "cannot open");
     }
     if (! -r $filename) {
-	# NOTE: exit(2) for unable to read filename
-	return(2, "cannot read");
+	# NOTE: exit(25) for unable to read filename
+	return(25, "cannot read");
     }
 
     # extract meta information from an image
@@ -758,12 +808,12 @@ sub file_date($)
     # firewall - file must be readable
     #
     if (! -e $filename) {
-	# NOTE: exit(2) for unable to open filename
-	return(3, "cannot open");
+	# NOTE: exit(26) for unable to open filename
+	return(26, "cannot open");
     }
     if (! -r $filename) {
-	# NOTE: exit(2) for unable to read filename
-	return(4, "cannot read");
+	# NOTE: exit(27) for unable to read filename
+	return(27, "cannot read");
     }
 
     # stat the file
@@ -808,14 +858,77 @@ sub form_dir($)
     #
     if (-e $dir_name && ! -d $dir_name) {
 	print STDERR "$0: is a non-directory: $dir_name\n";
-	return (1, "is a non-directory");
+	# NOTE: exit(28): non-directory
+	return (28, "is a non-directory");
     } elsif (! -d $dir_name && ! mkdir($dir_name, 0775)) {
 	print STDERR "$0: cannot mkdir: $dir_name: $!\n";
-	return (2, "cannot mkdir");
+	# NOTE: exit(29): mkdir error
+	return (29, "cannot mkdir");
     } elsif (! -w $dir_name) {
 	print STDERR "$0: directory is not writable: $dir_name\n";
-	return (3, "directory is not writable");
+	# NOTE: exit(30): dir not writbale
+	return (30, "directory is not writable");
     }
     # all is OK
     return (0, undef);
+}
+
+
+# roll_setup - setup and/or increment the .exifroll EXIF roll number file
+#
+# uses these globals:
+#
+#	$opt_r		see -r in program usage at top
+#	$rollnum	EXIF roll number
+#
+sub roll_setup()
+{
+    # process an existing ~/.exifroll file
+    #
+    $rollnum = "0000";	# default initial roll number
+    if (-e $opt_r) {
+
+	# firewall - must be readable
+	#
+	if (! -r $opt_r) {
+	    print STDERR "$0: cannot read exifroll file: $opt_r\n";
+	    exit(31);
+	} elsif (! -w $opt_r) {
+	    print STDERR "$0: cannot write exifroll file: $opt_r\n";
+	    exit(32);
+	}
+
+	# open ~/.exifroll file
+	#
+	if (! open EXIFROLL, 'r', $opt_r) {
+	    print STDERR "$0: cannot open for reading exifroll: $opt_r: $!\n";
+	    exit(33);
+	}
+
+	# read only the first line
+	#
+	$rollnum = <EXIFROLL>;
+	close EXIFROLL;
+
+	# assume roll number of 0000 if bad line or no line
+	#
+	if ($rollnum !~ /^\d{4}$/) {
+	    print STDERR "$0: Warning: invalid roll number in $opt_r\n";
+	    print STDERR "$0: will use roll number 0000 instead\n";
+	    $rollnum = "0000";
+	}
+    }
+
+    # write the next roll numner into ~/.exifroll
+    #
+    if (! open EXIFROLL, 'w', $opt_r) {
+	print STDERR "$0: cannot open for writing exifroll: $opt_r: $!\n";
+	exit(34);
+    }
+    if (! print EXIFROLL $rollnum+1, "\n") {
+	print STDERR "$0: cannot write next rollnum to exifroll: $opt_r: $!\n";
+	exit(35);
+    }
+    close EXIFROLL;
+    return;
 }
