@@ -89,7 +89,7 @@ my $help = qq{\n$usage
 
     NOTE:
 	exit 0	all is OK
-	exit >0 some other fatal error
+	exit >0 some fatal error
 };
 my %optctl = (
     "c" => \$opt_c,
@@ -156,6 +156,9 @@ MAIN: {
     }
     $srcdir = $ARGV[0];
     $destdir = $ARGV[1];
+    print "DEBUG: srcdir: $srcdir\n" if $opt_v > 0;
+    print "DEBUG: destdir: $destdir\n" if $opt_v > 0;
+    print "DEBUG: ~/exifroll: $opt_r\n" if $opt_v > 0;
 
     # setup to walk the srcdir
     #
@@ -186,6 +189,7 @@ MAIN: {
     # setup directories
     #
     $rolldir = "$destdir/roll";
+    print "DEBUG: rolldir: $rolldir\n" if $opt_v > 0;
     dir_setup();
     # initialize roll serial number $rollnum
     roll_setup();
@@ -415,16 +419,24 @@ sub wanted()
     my $topsubdir;		# lead dir of subpath, lower case, -'s removed
     my ($errcode, $errmsg);	# form_dir return values
 
+    # canonicalize the path by removing leading ./ and multiple //'s
+    #
+    print "DEBUG: wanted filename: $filename\n" if $opt_v > 3;
+    print "DEBUG: wanted given $File::Find::name\n" if $opt_v > 2;
+    ($pathname = $File::Find::name) =~ s|^\./||;
+    $pathname =~ s|//+|/|g;
+    print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
+
     # prune out anything that is not a directory or file
     #
     if (! -d $filename && ! -f $filename) {
 	# skip non-dir/non-files
+	print "DEBUG: prune #0 $pathname\n" if $opt_v > 2;
 	$File::Find::prune = 1;
-	print "DEBUG: prune #0 $File::Find::name\n" if $opt_v > 1;
 	return;
     }
 
-    # prune out destdir
+    # prune out destdir and rolldir
     #
     # If we hapened to walk into our destination directory, prune
     # as we do not want to get into a recursive copy loop.
@@ -433,8 +445,8 @@ sub wanted()
     if (($nodedev == $destdev && $nodeino == $destino) ||
         ($nodedev == $rolldev && $nodeino == $rollino)) {
 	# avoid recursion, skip walking into $destdir or $rolldir
+	print "DEBUG: prune #1 $pathname\n" if $opt_v > 2;
 	$File::Find::prune = 1;
-	print "DEBUG: prune #1 $File::Find::name\n" if $opt_v > 1;
 	return;
     }
 
@@ -443,11 +455,11 @@ sub wanted()
     # As notied in detail above, we will prune off any .Trashes,
     # .comstate.tof that are directly under $srcdir
     #
-    if ($File::Find::name eq "$srcdir/.Trashes" ||
-        $File::Find::name eq "$srcdir/.comstate.tof") {
+    if ($pathname eq "$srcdir/.Trashes" ||
+        $pathname eq "$srcdir/.comstate.tof") {
 	# skip this useless camera node
+	print "DEBUG: prune #2 $pathname\n" if $opt_v > 2;
 	$File::Find::prune = 1;
-	print "DEBUG: prune #2 $File::Find::name\n" if $opt_v > 1;
 	return;
     }
 
@@ -455,8 +467,8 @@ sub wanted()
     #
     if ($filename eq ".DS_Store") {
 	# skip OS X .DS_Store files
+	print "DEBUG: ignore #3 $pathname\n" if $opt_v > 2;
 	$File::Find::prune = 1;
-	print "DEBUG: ignore #3 $File::Find::name\n" if $opt_v > 1;
 	return;
     }
 
@@ -464,25 +476,18 @@ sub wanted()
     #
     if ($filename eq "." || $filename eq "..") {
 	# ignore but do not prune . and ..
-	print "DEBUG: ignore #4 $File::Find::name\n" if $opt_v > 1;
+	print "DEBUG: ignore #4 $pathname\n" if $opt_v > 2;
     	return;
     }
 
     # If we are at /$srcdir/DCIM, then just return (don't prune)
     # because we want to look at images below DCIM
     #
-    if ($File::Find::name eq "$srcdir/DCIM") {
+    if ($pathname eq "$srcdir/DCIM") {
 	# ignore but do not prune /DCIM
-	print "DEBUG: ignore #5 $File::Find::name\n" if $opt_v > 1;
+	print "DEBUG: ignore #5 $pathname\n" if $opt_v > 2;
     	return;
     }
-
-    # canonicalize the path by removing leading ./ and multiple //'s
-    #
-    print "DEBUG: wanted given $File::Find::name\n" if $opt_v > 2;
-    ($pathname = $File::Find::name) =~ s|^\./||;
-    $pathname =~ s|//+|/|g;
-    print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
 
     # For a directory that we do not ignore, we will make a
     # directory under out rolldir.  This rolldir will consist
@@ -506,13 +511,13 @@ sub wanted()
 	$roll = "$rolldir/$1";		# path beyond $srcdir/
     } else {
 	print STDERR "$0: Fatal $pathname not under $srcdir\n";
+	print "DEBUG: prune #6 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	print "DEBUG: prune #6 $pathname\n" if $opt_v > 1;
 	exit(13) unless defined $opt_e;
 	return;
     }
     print "DEBUG: roll directory: $roll\n" if $opt_v > 2;
-    print "DEBUG: subpath: $subpath\n" if $opt_v > 2;
+    print "DEBUG: subpath: $subpath\n" if $opt_v > 3;
 
     # Determine the top level directory under $srcdir/DCIM or $srcdir,
     # in lowercase without -'s
@@ -525,7 +530,7 @@ sub wanted()
     	$topsubdir = "";
     }
     $topsubdir = tr/[A-Z]/[a-z]/;
-    print "DEBUG: 1st 3 char of top level dir: $topsubdir\n" if $opt_v > 3;
+    print "DEBUG: top level subdir: $topsubdir\n" if $opt_v > 3;
 
     # directory processing
     #
@@ -537,19 +542,18 @@ sub wanted()
 
 	# create the roll subdir if needed
 	#
-	print "DEBUG: will try to mkdir $roll\n" if ($opt_v > 1 && ! -d $roll);
 	($errcode, $errmsg) = form_dir($roll);
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for $roll\n";
+	    print "DEBUG: prune #7 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    print "DEBUG: prune #7 $pathname\n" if $opt_v > 1;
 	    exit(14) unless defined $opt_e;
 	    return;
 	}
 
     # file processing
     #
-    } elsif (-f $filename) {
+    } else {
 	my $lowerfilename;	# lower case filename
 	my $levels;	# directoy levels under $srcdir/DCIM or $srcdir
 	my $datecode;	# exif_date error code or 0 ==> OK
@@ -568,7 +572,7 @@ sub wanted()
 	if ($datecode != 0) {
 	    print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
 	    		 "$datestamp\n";
-	    print "DEBUG: prune #8 $pathname\n" if $opt_v > 1;
+	    print "DEBUG: prune #8 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(15) unless defined $opt_e;
 	    return;
@@ -592,8 +596,8 @@ sub wanted()
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy\n";
+	    print "DEBUG: prune #9 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    print "DEBUG: prune #9 $pathname\n" if $opt_v > 1;
 	    exit(16) unless defined $opt_e;
 	    return;
 	}
@@ -601,8 +605,8 @@ sub wanted()
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy/$yyyymm\n";
+	    print "DEBUG: prune #10 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    print "DEBUG: prune #10 $pathname\n" if $opt_v > 1;
 	    exit(17) unless defined $opt_e;
 	    return;
 	}
@@ -610,8 +614,8 @@ sub wanted()
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyy/$yyyymm/$yyyymmdd\n";
+	    print "DEBUG: prune #11 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    print "DEBUG: prune #11 $pathname\n" if $opt_v > 1;
 	    exit(18) unless defined $opt_e;
 	    return;
 	}
@@ -623,7 +627,7 @@ sub wanted()
 	    unlink "$destpath" if $opt_f;
 	    if (-f "$destpath") {
 		print STDERR "$0: Fatal: desitnation exists: $destpath\n";
-		print "DEBUG: prune #12 $pathname\n" if $opt_v > 1;
+		print "DEBUG: prune #12 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(19) unless defined $opt_e;
 		return;
@@ -636,7 +640,7 @@ sub wanted()
 	    if (move($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "mv $filename $destpath failed: $!\n";
-		print "DEBUG: prune #13 $pathname\n" if $opt_v > 1;
+		print "DEBUG: prune #13 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(20) unless defined $opt_e;
 		return;
@@ -645,7 +649,7 @@ sub wanted()
 	    if (copy($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "cp $filename $destpath failed: $!\n";
-		print "DEBUG: prune #14 $pathname\n" if $opt_v > 1;
+		print "DEBUG: prune #14 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(21) unless defined $opt_e;
 		return;
@@ -657,7 +661,7 @@ sub wanted()
 	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "compare of $filename and $destpath failed\n";
-	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 1;
+	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(22) unless defined $opt_e;
 	    return;
@@ -677,18 +681,11 @@ sub wanted()
 	$destsym = "$roll/$destname";
 	if (symlink($srcsym, $destsym) != 1) {
 	    print STDERR "$0: Fatal: ln -s $srcsym $destdir failed: $!\n";
-	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 1;
+	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(23) unless defined $opt_e;
 	    return;
 	}
-
-    # not a file or directory
-    #
-    } else {
-	$File::Find::prune = 1;
-    	print "DEBUG: prune #17 $pathname: not a file or dir\n" if $opt_v > 1;
-	return;
     }
     return;
 }
@@ -860,14 +857,18 @@ sub form_dir($)
 	print STDERR "$0: is a non-directory: $dir_name\n";
 	# NOTE: exit(28): non-directory
 	return (28, "is a non-directory");
-    } elsif (! -d $dir_name && ! mkdir($dir_name, 0775)) {
-	print STDERR "$0: cannot mkdir: $dir_name: $!\n";
-	# NOTE: exit(29): mkdir error
-	return (29, "cannot mkdir");
-    } elsif (! -w $dir_name) {
-	print STDERR "$0: directory is not writable: $dir_name\n";
-	# NOTE: exit(30): dir not writbale
-	return (30, "directory is not writable");
+    }
+    if (! -d $dir_name) {
+	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
+        if (! mkdir($dir_name, 0775)) {
+	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
+	    # NOTE: exit(29): mkdir error
+	    return (29, "cannot mkdir");
+	} elsif (! -w $dir_name) {
+	    print STDERR "$0: directory is not writable: $dir_name\n";
+	    # NOTE: exit(30): dir not writbale
+	    return (30, "directory is not writable");
+	}
     }
     # all is OK
     return (0, undef);
@@ -930,5 +931,6 @@ sub roll_setup()
 	exit(35);
     }
     close EXIFROLL;
+    print "DEBUG: roll number: $rollnum\n" if $opt_v > 0;
     return;
 }
