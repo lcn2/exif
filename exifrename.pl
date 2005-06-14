@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.4 $
-# @(#) $Id: exifrename.pl,v 1.4 2005/05/19 00:45:57 chongo Exp chongo $
+# @(#) $Revision: 1.5 $
+# @(#) $Id: exifrename.pl,v 1.5 2005/06/14 09:47:49 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,7 +34,7 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_h $opt_v $opt_f);
+use vars qw($opt_h $opt_v $opt_f $opt_m);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -44,7 +44,7 @@ use File::Copy;
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.4 $, 10;
+my $VERSION = substr q$Revision: 1.5 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -70,9 +70,10 @@ my $exiftool;	# Image::ExifTool object
 
 # usage and help
 #
-my $usage = "$0 [-f][-h][-v lvl] srcdir destdir";
+my $usage = "$0 [-m][-f][-h][-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
+	-m	    move, do not copy files from srcdir to destdir
 	-f	    force overwrite of files and symlinks
 	-h	    print this help message
 	-v 	    verbose / debug level
@@ -85,6 +86,7 @@ my $help = qq{\n$usage
 	exit >0 some other fatal error
 };
 my %optctl = (
+    "m" => \$opt_m,
     "f" => \$opt_f,
     "h" => \$opt_h,
     "v=i" => \$opt_v,
@@ -210,7 +212,7 @@ MAIN: {
 #
 # Then we will create the file:
 #
-#	/destdir/2005/200505/20050515/20050515-152545-r0043-ls1f5627.cr2
+#    /destdir/2005/200505/20050515/20050515-152545-r0043-101eos1d-ls1f5627.cr2
 #
 # The created file path is:
 #
@@ -218,7 +220,7 @@ MAIN: {
 #	/2005				# image year
 #	/200505				# image year & month
 #	/20050515			# image year & month & day
-#	/20050515-152545-r0043-101-ls1f5627.cr2	# image filename
+#	/20050515-152545-r0043-101eos1d-ls1f5627.cr2	# image filename
 #
 # The directory tree /top/YYYY/YYYYMM/YYYYMMDD repeats the date down 3 levels
 # so that one can know in what date range you are dealing with at each
@@ -229,7 +231,7 @@ MAIN: {
 #
 # The filename itself:
 #
-#	20050515-152545-r0043-101-ls1f5627.cr2
+#	20050515-152545-r0043-101eos1d-ls1f5627.cr2
 #
 # is constructed out of the following:
 #
@@ -244,14 +246,14 @@ MAIN: {
 #	r			# indicaters roll
 #	0043			# image set number, 4 or more digits
 #	-			# 3rd separator
-#	101			# 1st 3 chars of top level subdir or empty
+#	101eos1d		# lowercase top level subdir w/o -'s or empty
 #	-			# 4th separator
 #	ls1f5627.cr2		# image basename, in lower case
 #
 # In addition, a symlink is setup under rolldir as follows:
 #
-#	 /destdir/roll/r0043/101eos1d/20050515-152545-r0043-101-ls1f5627.cr2 ->
-#	../../../2005/200505/20050515/20050515-152545-r0043-101-ls1f5627.cr2
+#   /destdir/roll/r0043/101eos1d/20050515-152545-r0043-101eos1d-ls1f5627.cr2 ->
+#  ../../../2005/200505/20050515/20050515-152545-r0043-101eos1d-ls1f5627.cr2
 #
 # Note that the symlink filename basename is the same as the destination
 # filename.
@@ -265,6 +267,7 @@ MAIN: {
 #			# or 1st directory under srcdir if no DCIM
 #			# or nothing at all if image was just under srcdir
 #			# converted to lower case
+#			# with all -'s removed
 #	# ...		# any further directories are preserved, and
 #			# converted to lower case as well
 #	/basename	# image basename
@@ -318,7 +321,7 @@ sub wanted()
     my $nodedev;		# device of the current file
     my $nodeino;		# inode number of the current file
     my $roll;			# roll path to form below $rolldir
-    my $first3;			# first 3 chars of the 1st level directory
+    my $topsubdir;		# lead dir of subpath, lower case, -'s removed
     my ($errcode, $errmsg);	# form_dir return values
 
     # prune out anything that is not a directory or file
@@ -419,20 +422,18 @@ sub wanted()
     print "DEBUG: roll directory: $roll\n" if $opt_v > 2;
     print "DEBUG: subpath: $subpath\n" if $opt_v > 2;
 
-    # Determine the 1st 3 chars of the top level directory under $srcdir/DCIM
-    # or $srcdir.
+    # Determine the top level directory under $srcdir/DCIM or $srcdir,
+    # in lowercase without -'s
     #
     if ($subpath =~ m|^([^/]+)/|) {
-	# 1st 3 chars of top level dir under $srcdir/DCIM or $srcdir
 	# remove -'s from the top level directory name
-    	($first3 = $1) =~ s/-//g;
-	$first3 = substr($first3, 0, 3);
+    	($topsubdir = $1) =~ s/-//g;
     } else {
-    	# no subdir, use empty 1st 3 char set
-    	$first3 = "";
+    	# no subdir, use empty string
+    	$topsubdir = "";
     }
-    $first3 = tr/[A-Z]/[a-z]/;
-    print "DEBUG: 1st 3 char of top level dir: $first3\n" if $opt_v > 3;
+    $topsubdir = tr/[A-Z]/[a-z]/;
+    print "DEBUG: 1st 3 char of top level dir: $topsubdir\n" if $opt_v > 3;
 
     # directory processing
     #
@@ -487,7 +488,7 @@ sub wanted()
 	$yyyymm = $yyyy . strftime("%m", gmtime($datestamp));
 	$yyyymmdd = $yyyymm . strftime("%d", gmtime($datestamp));
 	$destname = "$yyyymmdd-" . strftime("%H%M%S", gmtime($datestamp)) .
-		    "-r$rollnum-$first3-$lowerfilename";
+		    "-r$rollnum-$topsubdir-$lowerfilename";
 	$destpath = "$destdir/$yyyy/$yyyymm/$yyyymmdd/$destname";
 	print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
 
@@ -531,14 +532,24 @@ sub wanted()
 	    }
 	}
 
-	# copy the image file
+	# copy (or move of -m) the image file
 	#
-	if (copy($pathname, $destpath) == 0) {
-	    print STDERR "$0: in ", $File::Find::dir, ": ",
-	    		 "cp $filename $destpath failed: $!\n";
-	    print "DEBUG: prune #13 $pathname\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    return;
+	if ($opt_m) {
+	    if (move($pathname, $destpath) == 0) {
+		print STDERR "$0: in ", $File::Find::dir, ": ",
+			     "mv $filename $destpath failed: $!\n";
+		print "DEBUG: prune #13 $pathname\n" if $opt_v > 1;
+		$File::Find::prune = 1;
+		return;
+	    }
+	} else {
+	    if (copy($pathname, $destpath) == 0) {
+		print STDERR "$0: in ", $File::Find::dir, ": ",
+			     "cp $filename $destpath failed: $!\n";
+		print "DEBUG: prune #14 $pathname\n" if $opt_v > 1;
+		$File::Find::prune = 1;
+		return;
+	    }
 	}
 
 	# form the symlink
@@ -549,7 +560,7 @@ sub wanted()
 	$destsym = "$roll/$destname";
 	if (symlink($srcsym, $destsym) != 1) {
 	    print STDERR "$0: ln -s $srcsym $destdir failed: $!\n";
-	    print "DEBUG: prune #14 $pathname\n" if $opt_v > 1;
+	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    return;
 	}
@@ -558,7 +569,7 @@ sub wanted()
     #
     } else {
 	$File::Find::prune = 1;
-    	print "DEBUG: prune #15 $pathname: not a file or dir\n"
+    	print "DEBUG: prune #16 $pathname: not a file or dir\n"
 	    if $opt_v > 1;
 	return;
     }
