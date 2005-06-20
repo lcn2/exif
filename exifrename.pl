@@ -2,9 +2,9 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.8 $
-# @(#) $Id: exifrename.pl,v 1.8 2005/06/14 17:56:34 chongo Exp chongo $
-# @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
+# @(#) $Revision: 1.9 $
+# @(#) $Id: exifrename.pl,v 1.9 2005/06/20 17:27:06 chongo Exp chongo $
+# @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -45,7 +45,7 @@ use File::Compare;
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.8 $, 10;
+my $VERSION = substr q$Revision: 1.9 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -56,6 +56,8 @@ my $destdev;	# device of $destdir
 my $destino;	# inode numner of $destdir
 my $rollnum;	# EXIF roll number
 my $exiftool;	# Image::ExifTool object
+my $untaint = qr|^([-+@\w./]+)$|; 	# untainting path pattern
+
 
 # EXIF timestamp related tag names to look for
 #
@@ -120,9 +122,8 @@ my %optctl = (
 #
 sub wanted();
 sub dir_setup();
-sub exif_setup();
-sub timestamp($$);
-sub exif_date($$);
+sub timestamp($);
+sub exif_date($);
 sub file_date($);
 sub form_dir($);
 sub roll_setup();
@@ -131,7 +132,8 @@ sub roll_setup();
 # setup
 #
 MAIN: {
-    my %find_opt;		# File::Find directory tree walk options
+    my %find_opt;	# File::Find directory tree walk options
+    my %exifoptions;	# Image::ExifTool options
 
     # setup
     #
@@ -182,10 +184,10 @@ MAIN: {
     $find_opt{no_chdir} = 0;	# OK to chdir as we walk the tree
     $find_opt{untaint} = 1;	# untaint dirs we chdir to
     # NOTE: We will only cd into dirs whose name is only [-+@\w./] chars
-    $find_opt{untaint_pattern} = qr|^([-+@\w./]+)$|; # untaint pattern
+    $find_opt{untaint_pattern} = $untaint; # untaint pattern
     $find_opt{untaint_skip} = 1; # we will skip any dir that is tainted
 
-    # untaint $srcdir and $destdir
+    # untaint $srcdir, $destdir, and $opt_r
     #
     if ($srcdir =~ /$find_opt{untaint_pattern}/) {
     	$srcdir = $1;
@@ -199,6 +201,12 @@ MAIN: {
 	print STDERR "$0: bogus chars in destdir\n";
 	exit(6);
     }
+    if ($opt_r =~ /$find_opt{untaint_pattern}/) {
+    	$opt_r = $1;
+    } else {
+	print STDERR "$0: bogus chars in -r filename\n";
+	exit(7);
+    }
 
     # setup directories
     #
@@ -208,9 +216,15 @@ MAIN: {
     #
     roll_setup();
 
-    # setup ExifTool
+    # setup ExifTool options
     #
-    $exiftool = exif_setup();
+    $exifoptions{Binary} = 0;		# no timestamp is a binary field
+    $exifoptions{PrintConv} = 1;	# we will need to convert timestamps
+    $exifoptions{Unknown} = 0;		# ignore unknown fields
+    $exifoptions{DateFormat} = '%s';	# timestamps as seconds since the Epoch
+    $exifoptions{Duplicates} = 0;	# use the last timestamp if we have dups
+    $exiftool = new Image::ExifTool;
+    $exiftool->Options(%exifoptions);
 
     # walk the srcdir, making renamed copies and symlinks
     #
@@ -227,7 +241,7 @@ MAIN: {
 # uses these globals:
 #
 #	$srcdir		where images are from
-#	$desdir		where copied and renamed files go
+#	$destdir	where copied and renamed files go
 #
 # sets these global values:
 #
@@ -244,19 +258,19 @@ sub dir_setup()
     #
     if (! -e $srcdir) {
 	print STDERR "$0: srcdir does not exist: $srcdir\n";
-	exit(7);
+	exit(8);
     }
     if (! -d $srcdir) {
 	print STDERR "$0: srcdir is not a directory: $srcdir\n";
-	exit(8);
+	exit(9);
     }
     if (! -r $srcdir) {
 	print STDERR "$0: srcdir is not readable: $srcdir\n";
-	exit(9);
+	exit(10);
     }
     if (! -x $srcdir) {
 	print STDERR "$0: srcdir is not searchable: $srcdir\n";
-	exit(10);
+	exit(11);
     }
 
     # setup the destination directory if needed
@@ -264,7 +278,7 @@ sub dir_setup()
     ($errcode, $errmsg) = form_dir($destdir);
     if ($errcode != 0) {
 	print STDERR "$0: mkdir error: $errmsg for $destdir\n";
-	exit(11);
+	exit(12);
     }
 
     # record the device and inode number of $destdir
@@ -289,9 +303,9 @@ sub dir_setup()
 #	$opt_o		see -o in program usage at top
 #	$opt_t		see -t in program usage at top
 #	$srcdir		where images are from
-#	$desdir		where copied and renamed files go
+#	$destdir	where copied and renamed files go
 #	$rollnum	EXIF roll number
-#	$exiftool	Image::ExifTool object
+#	$untaint	untainting path pattern
 #
 # Consider the a file under srcdir:
 #
@@ -390,8 +404,6 @@ sub dir_setup()
 #	$File::Find::topdev	device of the top directory
 #	$File::Find::topino	inode number of the top directory
 #
-# XXX - tie non image files to their image parent dates?
-#
 sub wanted()
 {
     my $filename = $_;		# current filename within $File::Find::dir
@@ -403,17 +415,17 @@ sub wanted()
 
     # canonicalize the path by removing leading ./ and multiple //'s
     #
-    print "DEBUG: wanted filename: $filename\n" if $opt_v > 3;
-    print "DEBUG: wanted given $File::Find::name\n" if $opt_v > 2;
+    print "DEBUG: in wanted, filename: $filename\n" if $opt_v > 3;
+    print "DEBUG: in wanted, given $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./)+||;
     $pathname =~ s|//+|/|g;
     print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
 
-    # prune out anything that is not a directory or file
+    # prune out anything that is directory or file
     #
     if (! -d $filename && ! -f $filename) {
 	# skip non-dir/non-files
-	print "DEBUG: prune #0 $pathname\n" if $opt_v > 2;
+	print "DEBUG: non-dir/non-file prune #0 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -423,10 +435,15 @@ sub wanted()
     # As notied in detail above, we will prune off any .Trashes,
     # .comstate.tof that are directly under $srcdir
     #
-    if ($pathname eq "$srcdir/.Trashes" ||
-        $pathname eq "$srcdir/.comstate.tof") {
+    if ($pathname eq "$srcdir/.Trashes") {
 	# skip this useless camera node
-	print "DEBUG: prune #2 $pathname\n" if $opt_v > 2;
+	print "DEBUG: .Trashes prune #1 $pathname\n" if $opt_v > 3;
+	$File::Find::prune = 1;
+	return;
+    }
+    if ($pathname eq "$srcdir/.comstate.tof") {
+	# skip this useless camera node
+	print "DEBUG: .comstate.tof prune #2 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -435,49 +452,73 @@ sub wanted()
     #
     if ($filename eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	print "DEBUG: ignore #3 $pathname\n" if $opt_v > 2;
+	print "DEBUG: .DS_Store prune #3 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
 
-    # ignore (but not prune) . and ..
+    # ignore names that match common directories
     #
-    if ($filename eq "." || $filename eq "..") {
-	# ignore but do not prune . and ..
-	print "DEBUG: ignore #4 $pathname\n" if $opt_v > 2;
+    if ($filename eq ".") {
+	# ignore but do not prune directories
+	print "DEBUG: . ignore #4 $pathname\n" if $opt_v > 3;
+    	return;
+    }
+    if ($filename eq "..") {
+	# ignore but do not prune directories
+	print "DEBUG: .. ignore #5 $pathname\n" if $opt_v > 3;
+    	return;
+    }
+    if ($filename eq "DCIM") {
+	# ignore but do not prune directories
+	print "DEBUG: DCIM ignore #6 $pathname\n" if $opt_v > 3;
     	return;
     }
 
-    # If we are at /$srcdir/DCIM, then just return (don't prune)
-    # because we want to look at images below DCIM
+    # ignore non-files
     #
-    if ($pathname eq "$srcdir/DCIM") {
-	# ignore but do not prune /DCIM
-	print "DEBUG: ignore #5 $pathname\n" if $opt_v > 2;
+    if (! -f $filename) {
+	# ignore but do not prune directories
+	print "DEBUG: dir ignore #7 $pathname\n" if $opt_v > 3;
     	return;
     }
 
     # Determine the top level directory under $srcdir/DCIM or $srcdir,
     # in lowercase without -'s
     #
-    if ($pathname =~ m|^$srcdir/DCIM/(.+)/$|o) {
+    if ($pathname =~ m|^$srcdir/DCIM/(.+)/|o) {
 	$roll_sub = $1;
-    } elsif ($pathname =~ m|^$srcdir/(.+)/$|o) {
+	print "DEBUG: orig roll_sub under DCIM is: $roll_sub\n" if $opt_v > 4;
+    } elsif ($pathname =~ m|^$srcdir/(.+)/|o) {
 	$roll_sub = $1;
+	print "DEBUG: orig roll_sub w/o DCIM is: $roll_sub\n" if $opt_v > 4;
     } elsif ($pathname =~ m|^$srcdir/(.+)$|o) {
 	$roll_sub = "";
+	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
     } else {
 	print STDERR "$0: Fatal $pathname not under $srcdir\n";
-	print "DEBUG: prune #13 $pathname\n" if $opt_v > 0;
+	print "DEBUG: non-srcdir prune #13 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(13) unless defined $opt_e;
 	return;
     }
-    $roll_sub = tr/[A-Z]/[a-z]/;	# conver to lower case
+    $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
     $roll_sub =~ s/eos\w+$//;	# remove common EOS trailing chars
     $roll_sub =~ s/-//g;	# no extra -'s
     $roll_sub = "$rollnum-$roll_sub";
     print "DEBUG: top level subdir: $roll_sub\n" if $opt_v > 2;
+
+    # untaint roll_sub
+    #
+    if ($roll_sub =~ /$untaint/o) {
+    	$roll_sub = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in roll_sub \n";
+	print "DEBUG: tainted roll_sub prune #14 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(14) unless defined $opt_e;
+	return;
+    }
 
     # file processing
     #
@@ -496,11 +537,11 @@ sub wanted()
 
 	# determine the date of the image by EXIF or filename date
 	#
-	($datecode, $datestamp) = timestamp($exiftool, $filename);
+	($datecode, $datestamp) = timestamp($pathname);
 	if ($datecode != 0) {
 	    print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
 	    		 "$datestamp\n";
-	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(15) unless defined $opt_e;
 	    return;
@@ -538,7 +579,7 @@ sub wanted()
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyymm\n";
-	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: mkdir err prune #16 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(16) unless defined $opt_e;
 	    return;
@@ -547,7 +588,7 @@ sub wanted()
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyymm/$roll_sub\n";
-	    print "DEBUG: prune #17 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: mkdir err prune #17 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(17) unless defined $opt_e;
 	    return;
@@ -597,7 +638,7 @@ sub wanted()
 	    if ($dupnum > 99) {
 		print STDERR "$0: Fatal: more than 99 duplicates for ",
 			     "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
-		print "DEBUG: prune #18 $pathname\n" if $opt_v > 0;
+		print "DEBUG: 100 dups prune #18 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(18) unless defined $opt_e;
 		return;
@@ -606,26 +647,40 @@ sub wanted()
 	print "DEBUG: destination: $destname\n" if $opt_v > 1;
 	print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
 
+	# untaint destpath
+	#
+	if ($destpath =~ /$untaint/o) {
+	    $destpath = $1;
+	} else {
+	    print STDERR "$0: Fatal: strange chars in destpath \n";
+	    print "DEBUG: tainted destpath prune #19 $pathname\n" if $opt_v > 0;
+	    $File::Find::prune = 1;
+	    exit(19) unless defined $opt_e;
+	    return;
+	}
+
 	# copy (or move of -m) the image file
 	#
 	if (defined $opt_m) {
 	    if (move($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "mv $filename $destpath failed: $!\n";
-		print "DEBUG: prune #20 $pathname\n" if $opt_v > 0;
+		print "DEBUG: mv err prune #20 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(20) unless defined $opt_e;
 		return;
 	    }
+	    print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
 	} else {
 	    if (copy($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "cp $filename $destpath failed: $!\n";
-		print "DEBUG: prune #21 $pathname\n" if $opt_v > 0;
+		print "DEBUG: cp err prune #21 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(21) unless defined $opt_e;
 		return;
 	    }
+	    print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
 	}
 
 	# compare unless -t
@@ -633,11 +688,12 @@ sub wanted()
 	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "compare of $filename and $destpath failed\n";
-	    print "DEBUG: prune #22 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: cmp err prune #22 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(22) unless defined $opt_e;
 	    return;
 	}
+	print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
 
 	# set the access and modification time unless -t
 	#
@@ -646,35 +702,6 @@ sub wanted()
 	}
     }
     return;
-}
-
-
-# exif_setup - setup for ExifTool processing
-#
-# returns:
-#	Image::ExifTool object
-#
-sub exif_setup()
-{
-    my %exifoptions;			# ExifTool options
-    my $exif_tool;			# Image::ExifTool object
-
-    # setup ExifTool options
-    #
-    $exifoptions{Binary} = 0;		# no timestamp is a binary field
-    $exifoptions{PrintConv} = 0;	# no need to waste time converting
-    $exifoptions{Unknown} = 0;		# all timestamps are in known fields
-    $exifoptions{DateFormat} = "\%s";	# timestamps as seconds since the Epoch
-    $exifoptions{Duplicates} = 0;	# use the last timestamp if we have dups
-
-    # create a new Image::ExifTool object
-    #
-    $exif_tool = new Image::ExifTool;
-
-    # set the ExifTool options
-    #
-    $exif_tool->Options(%exifoptions);
-    return $exif_tool;
 }
 
 
@@ -713,7 +740,6 @@ sub exif_setup()
 # create/modify timestamp.
 #
 # given:
-#	$exiftool	Image::ExifTool object
 #	$filename	image filename to process
 #
 # returns:
@@ -721,18 +747,20 @@ sub exif_setup()
 #	    $exitcode:	0 ==> OK, else ==> exit code
 #	    $message:	$exitcode==0 ==> timestamp, else error message
 #
-sub timestamp($$)
+sub timestamp($)
 {
-    my ($exiftool, $filename) = @_;	# get args
+    my ($filename) = @_;	# get args
     my $noext;			# filename without any extension
     my $exif_file;		# a potential EXIF related filename
     my $extension;		# a potential EXIF related file extension
     my $errcode;		# 0 ==> OK
     my $timestamp = -1;	# seconds since the epoch of early tstamp or -1
+    my $filename_dev;		# device of the $filename arg
+    my $filename_ino;		# inode number of the $filename arg
 
     # try to get an EXIF based timestamp
     #
-    ($errcode, $timestamp) = exif_date($exiftool, $filename);
+    ($errcode, $timestamp) = exif_date($filename);
     if ($errcode == 0) {
 	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
 	return (0, $timestamp);
@@ -740,24 +768,47 @@ sub timestamp($$)
     print "DEBUG: EXIF timestamp $filename: error: $errcode: ",
     	  "$timestamp\n" if $opt_v > 4;
 
+    # We did not find a valif EXIF in gthe filename, so we will
     # look for related files that might have EXIF data
     #
+    ($filename_dev, $filename_ino, ) = stat($filename);
     ($noext = $filename) =~ s|\.[^./]*$||;
     foreach $extension ( @exif_ext ) {
 
 	# Look for a related readable file that is likely to have
 	# EXIF data in it ... and only if that related filename
 	# is not exactly the same as our filename argument.
+	#
 	$exif_file = "$noext.$extension";
 	if ($exif_file ne $filename && -r $exif_file) {
-	    my $errcode;		# 0 ==> OK
-	    my $timestamp;		# timestamp or error msg
+	    my $errcode;	# 0 ==> OK
+	    my $timestamp;	# timestamp or error msg
+	    my $exif_dev;	# device of the related EXIF filename
+	    my $exif_ino;	# inode number of the related EXIF filename
+
+	    # ignore if same dev/inode
+	    #
+	    # We cannot depend on a filename match to determine
+	    # if our EXIF candidate is the same file.  Some OS'
+	    # have case insensitive filenames.  Some OS' allow
+	    # for hard links or symlinks.  We match on the
+	    # device and inode number in addition to the filename.
+	    #
+	    ($exif_dev, $exif_ino, ) = stat($exif_file);
+	    if (defined $filename_dev && defined $exif_dev &&
+	    	$filename_dev == $exif_dev &&
+	        defined $filename_ino && defined $exif_ino &&
+	    	$filename_ino == $exif_ino) {
+		print "DEBUG: ignoring EXIF file: $exif_file, same as ",
+		      "filename: $filename\n" if $opt_v > 4;
+		next;
+	    }
 
 	    # try to get an EXIF based timestamp
 	    #
 	    print "DEBUG: looking at related filename: $exif_file\n"
 	    	if $opt_v > 4;
-	    ($errcode, $timestamp) = exif_date($exiftool, $exif_file);
+	    ($errcode, $timestamp) = exif_date($exif_file);
 
 	    # return EXIF data if we were able to find a good timestamp
 	    #
@@ -772,7 +823,9 @@ sub timestamp($$)
     }
     print "DEBUG: found no related EXIF file for: $filename\n" if $opt_v > 4;
 
-    # use the file method and return whatever it says
+    # No valid EXIF timestamps in the file or related readable files.
+    # Try the file's creation / modification timestamp and return
+    # whatever it says ... a timestamp or error.
     #
     ($errcode, $timestamp) = file_date($filename);
     if ($opt_v > 4) {
@@ -790,20 +843,23 @@ sub timestamp($$)
 # exif_date - determine a file date string using EXIF data
 #
 # given:
-#	$exiftool	Image::ExifTool object
 #	$filename	image filename to process
+#
+# uses these globals:
+#
+#	$exiftool	Image::ExifTool object
 #
 # returns:
 #	($exitcode, $message)
 #	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
 #	    $message:	$exitcode==0 ==> timestamp, else error message
 #
-sub exif_date($$)
+sub exif_date($)
 {
-    my ($exiftool, $filename) = @_;	# get args
+    my ($filename) = @_;	# get args
     my $info;		# exiftool extracted EXIF information
     my $tag;		# EXIF tag name
-    my $timestamp = -1;	# seconds since the epoch of early tstamp or -1
+    my $timestamp;	# seconds since the epoch of early tstamp or -1
 
     # firewall - image file must be readable
     #
@@ -833,13 +889,30 @@ sub exif_date($$)
     # We are looking for the earliest timestamp that is not before
     # $mintime.  A < 0 timestamp means nothing found so far.
     #
+    $timestamp = -1;	# no timestamp yet
     foreach $tag (@tag_list) {
 
 	# ignore if no EXIF value or non-numeric
 	#
-	if (defined $$info{$tag} && $$info{$tag} =~ /^\d+$/ &&
-	    $$info{$tag} > $mintime &&
-	    ($timestamp < 0 || $$info{$tag} < $timestamp)) {
+	if (! defined $$info{$tag}) {
+	    print "DEBUG: ignoring undef tag value: $tag\n" if $opt_v > 5;
+	} elsif ($$info{$tag} !~ /^\d+$/) {
+	    print "DEBUG: ignoring non-numeric tag: $tag: ",
+	    	"$$info{$tag}\n" if $opt_v > 5;
+	} elsif ($$info{$tag} <= $mintime) {
+	    print "DEBUG: ignoring pre-mintime: $tag: ",
+	    	  "$$info{$tag} <= $mintime\n" if $opt_v > 5;
+	} elsif ($timestamp > 0 && $$info{$tag} == $timestamp) {
+	    print "DEBUG: ignoring timestamp tag: $tag: ",
+	    	  "$$info{$tag} same value\n"
+		  if $opt_v > 5;
+	} elsif ($timestamp > 0 && $$info{$tag} > $timestamp) {
+	    print "DEBUG: ignoring timestamp tag: $tag: ",
+	    	  "$$info{$tag} that is not earlist > $timestamp\n"
+		  if $opt_v > 5;
+	} else {
+	    print "DEBUG: found useful numeric timestamp tag: $tag ",
+	    	  "$$info{$tag}\n" if $opt_v > 5;
 	    $timestamp = $$info{$tag};
         }
     }
@@ -923,7 +996,7 @@ sub file_date($)
 #
 sub form_dir($)
 {
-    my ($dir_name) = $_;	# get args
+    my ($dir_name) = @_;	# get args
 
     # setup the destination directory if needed
     #
@@ -975,7 +1048,7 @@ sub roll_setup()
 
 	# open ~/.exifroll file
 	#
-	if (! open EXIFROLL, 'r', $opt_r) {
+	if (! open EXIFROLL, '<', $opt_r) {
 	    print STDERR "$0: cannot open for reading exifroll: $opt_r: $!\n";
 	    exit(33);
 	}
@@ -983,6 +1056,7 @@ sub roll_setup()
 	# read only the first line
 	#
 	$rollnum = <EXIFROLL>;
+	chomp $rollnum;
 	close EXIFROLL;
 
 	# assume roll number of 000 if bad line or no line
@@ -996,18 +1070,18 @@ sub roll_setup()
 
     # write the next roll numner into ~/.exifroll
     #
-    if (! open EXIFROLL, 'w', $opt_r) {
+    if (! open EXIFROLL, '>', $opt_r) {
 	print STDERR "$0: cannot open for writing exifroll: $opt_r: $!\n";
 	exit(34);
     }
     if ($rollnum > 999) {
-	if (! print EXIFROLL "000", "\n") {
+	if (! print EXIFROLL "000\n") {
 	    print STDERR "$0: cannot write 000 rollnum ",
 	    		 "to exifroll: $opt_r: $!\n";
 	    exit(35);
 	}
     } else {
-	if (! print EXIFROLL $rollnum+1, "\n") {
+	if (! printf EXIFROLL "%03d\n", $rollnum+1) {
 	    print STDERR "$0: cannot write next rollnum ",
 	    		 "to exifroll: $opt_r: $!\n";
 	    exit(36);
