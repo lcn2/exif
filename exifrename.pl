@@ -42,6 +42,7 @@ use File::Find;
 no warnings 'File::Find';
 use File::Copy;
 use File::Compare;
+use File::Basename;
 
 # version - RCS style *and* usable by MakeMaker
 #
@@ -486,13 +487,10 @@ sub wanted()
     # Determine the top level directory under $srcdir/DCIM or $srcdir,
     # in lowercase without -'s
     #
-    if ($pathname =~ m|^$srcdir/DCIM/(.+)/|o) {
-	$roll_sub = $1;
-	print "DEBUG: orig roll_sub under DCIM is: $roll_sub\n" if $opt_v > 4;
-    } elsif ($pathname =~ m|^$srcdir/(.+)/|o) {
-	$roll_sub = $1;
-	print "DEBUG: orig roll_sub w/o DCIM is: $roll_sub\n" if $opt_v > 4;
-    } elsif ($pathname =~ m|^$srcdir/(.+)$|o) {
+    if ($pathname =~ m|^$srcdir/[^/]+/|o) {
+	$roll_sub = basename(dirname($pathname));
+	print "DEBUG: orig roll_sub DCIM is: $roll_sub\n" if $opt_v > 4;
+    } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
 	$roll_sub = "";
 	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
     } else {
@@ -504,7 +502,8 @@ sub wanted()
     }
     $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
     $roll_sub =~ s/eos\w+$//;	# remove common EOS trailing chars
-    $roll_sub =~ s/-//g;	# no extra -'s
+    $roll_sub =~ s/-raw$//;	# remove common -raw ending
+    $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
     $roll_sub = "$rollnum-$roll_sub";
     print "DEBUG: top level subdir: $roll_sub\n" if $opt_v > 2;
 
@@ -548,6 +547,19 @@ sub wanted()
 	}
 	print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
 
+	# untaint datestamp
+	#
+	if ($datestamp =~ /$untaint/o) {
+	    $datestamp = $1;
+	} else {
+	    print STDERR "$0: Fatal: strange chars in datestamp \n";
+	    print "DEBUG: tainted datestamp prune #16 $pathname\n"
+	    	if $opt_v > 0;
+	    $File::Find::prune = 1;
+	    exit(16) unless defined $opt_e;
+	    return;
+	}
+
 	# canonicalize the filename
 	#
 	($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
@@ -573,24 +585,36 @@ sub wanted()
 	$yyyymm = strftime("%Y%m", gmtime($datestamp));
 	$dd = strftime("%d", gmtime($datestamp));
 
+	# untaint yyyymm
+	#
+	if ($yyyymm =~ /$untaint/o) {
+	    $yyyymm = $1;
+	} else {
+	    print STDERR "$0: Fatal: strange chars in yyyymm \n";
+	    print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
+	    $File::Find::prune = 1;
+	    exit(17) unless defined $opt_e;
+	    return;
+	}
+
 	# ensure the $destdir/yyyymm/rol-sub direct path exists
 	#
 	($errcode, $errmsg) = form_dir("$destdir/$yyyymm");
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyymm\n";
-	    print "DEBUG: mkdir err prune #16 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: mkdir err prune #18 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(16) unless defined $opt_e;
+	    exit(18) unless defined $opt_e;
 	    return;
 	}
 	($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
 	    		 "$destdir/$yyyymm/$roll_sub\n";
-	    print "DEBUG: mkdir err prune #17 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(17) unless defined $opt_e;
+	    exit(19) unless defined $opt_e;
 	    return;
 	}
 
@@ -638,9 +662,9 @@ sub wanted()
 	    if ($dupnum > 99) {
 		print STDERR "$0: Fatal: more than 99 duplicates for ",
 			     "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
-		print "DEBUG: 100 dups prune #18 $pathname\n" if $opt_v > 0;
+		print "DEBUG: 100 dups prune #20 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
-		exit(18) unless defined $opt_e;
+		exit(20) unless defined $opt_e;
 		return;
 	    }
 	} while (-e "$destpath");
@@ -653,9 +677,9 @@ sub wanted()
 	    $destpath = $1;
 	} else {
 	    print STDERR "$0: Fatal: strange chars in destpath \n";
-	    print "DEBUG: tainted destpath prune #19 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: tainted destpath prune #21 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(19) unless defined $opt_e;
+	    exit(21) unless defined $opt_e;
 	    return;
 	}
 
@@ -665,9 +689,9 @@ sub wanted()
 	    if (move($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "mv $filename $destpath failed: $!\n";
-		print "DEBUG: mv err prune #20 $pathname\n" if $opt_v > 0;
+		print "DEBUG: mv err prune #22 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
-		exit(20) unless defined $opt_e;
+		exit(22) unless defined $opt_e;
 		return;
 	    }
 	    print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
@@ -675,9 +699,9 @@ sub wanted()
 	    if (copy($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "cp $filename $destpath failed: $!\n";
-		print "DEBUG: cp err prune #21 $pathname\n" if $opt_v > 0;
+		print "DEBUG: cp err prune #23 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
-		exit(21) unless defined $opt_e;
+		exit(23) unless defined $opt_e;
 		return;
 	    }
 	    print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
@@ -688,9 +712,9 @@ sub wanted()
 	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "compare of $filename and $destpath failed\n";
-	    print "DEBUG: cmp err prune #22 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: cmp err prune #24 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(22) unless defined $opt_e;
+	    exit(24) unless defined $opt_e;
 	    return;
 	}
 	print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
@@ -700,6 +724,7 @@ sub wanted()
 	if (! defined $opt_t) {
 	    utime $datestamp, $datestamp, $destpath;
 	}
+	print "DEBUG: processed: $destpath\n" if $opt_v > 0;
     }
     return;
 }
@@ -864,12 +889,12 @@ sub exif_date($)
     # firewall - image file must be readable
     #
     if (! -e $filename) {
-	# NOTE: exit(24) for unable to open filename
-	return (24, "cannot open");
+	# NOTE: exit(25) for unable to open filename
+	return (25, "cannot open");
     }
     if (! -r $filename) {
-	# NOTE: exit(25) for unable to read filename
-	return (25, "cannot read");
+	# NOTE: exit(26) for unable to read filename
+	return (26, "cannot read");
     }
 
     # extract meta information from an image
@@ -1010,11 +1035,11 @@ sub form_dir($)
         if (! mkdir($dir_name, 0775)) {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
 	    # NOTE: exit(29): mkdir error
-	    return (32, "cannot mkdir");
+	    return (29, "cannot mkdir");
 	} elsif (! -w $dir_name) {
 	    print STDERR "$0: directory is not writable: $dir_name\n";
 	    # NOTE: exit(30): dir not writbale
-	    return (33, "directory is not writable");
+	    return (30, "directory is not writable");
 	}
     }
     # all is OK
