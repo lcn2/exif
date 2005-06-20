@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.6 $
-# @(#) $Id: exifrename.pl,v 1.6 2005/06/14 10:02:07 chongo Exp chongo $
+# @(#) $Revision: 1.8 $
+# @(#) $Id: exifrename.pl,v 1.8 2005/06/14 17:56:34 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,7 +34,7 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_h $opt_v $opt_f $opt_m $opt_t $opt_c $opt_e $opt_r);
+use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_e $opt_r);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -45,39 +45,52 @@ use File::Compare;
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.6 $, 10;
+my $VERSION = substr q$Revision: 1.8 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
 #
+my $srcdir;	# source of image files
+my $destdir;	# where the renamed files will be copied
+my $destdev;	# device of $destdir
+my $destino;	# inode numner of $destdir
+my $rollnum;	# EXIF roll number
+my $exiftool;	# Image::ExifTool object
+
 # EXIF timestamp related tag names to look for
-my @tag_list = qw( ModifyDate DateTimeOriginal CreateDate );
 #
+my @tag_list = qw( ModifyDate DateTimeOriginal CreateDate );
+
+# file extensions, in priority order, that are likely to
+# contain EXIF data
+#
+my @exif_ext = qw(
+    cr2 CR2
+    raw RAW
+    tif TIF tiff TIFF
+    jpg JPG jpeg JPEG
+    png PNG
+    gif GIF
+    psd PSD
+    eps EPS
+);
+
 # timestamps prior to:
 #	Tue Nov  5 00:53:20 1985 UTC
 # are too old for an image with EXIF data.   See:
 #	perl -e 'my $x=500000000; print scalar gmtime($x), "\n";'
 #
 my $mintime = 500000000;
-my $srcdir;	# source of image files
-my $destdir;	# where the renamed files will be copied
-my $destdev;	# device of $destdir
-my $destino;	# inode numner of $destdir
-my $rollnum;	# EXIF roll number
-my $rolldir;	# $destdir/roll under where roll symlinks go
-my $rolldev;	# device of $rolldir
-my $rollino;	# inode numner of $rolldir
-my $exiftool;	# Image::ExifTool object
 
 # usage and help
 #
-my $usage = "$0 [-c][-e][-f][-m][-r rollfile][-t] [-h][-v lvl] srcdir destdir";
+my $usage = "$0 [-c][-e][-m][-o][-r rollfile][-t] [-h][-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
 	-c	     don't verify/compare files after they are copied (def: do)
 	-e	     don't abort on fatal errors (def: exit)
-	-f	     force overwrite of files and symlinks (def: don't)
 	-m	     move, do not copy files from srcdir to destdir (def: copy)
+	-o	     overwrite, don't add _# after time on duplicates (def: add)
 	-r rollfile  read EXIF rull number of rollfile (def: ~/.exifroll)
 	-t	     don't touch modtime to match EXIF/file image (def: do)
 
@@ -94,9 +107,9 @@ my $help = qq{\n$usage
 my %optctl = (
     "c" => \$opt_c,
     "e" => \$opt_e,
-    "f" => \$opt_f,
     "h" => \$opt_h,
     "m" => \$opt_m,
+    "o" => \$opt_o,
     "r=s" => \$opt_r,
     "t" => \$opt_t,
     "v=i" => \$opt_v,
@@ -108,6 +121,7 @@ my %optctl = (
 sub wanted();
 sub dir_setup();
 sub exif_setup();
+sub timestamp($$);
 sub exif_date($$);
 sub file_date($);
 sub form_dir($);
@@ -188,10 +202,10 @@ MAIN: {
 
     # setup directories
     #
-    $rolldir = "$destdir/roll";
-    print "DEBUG: rolldir: $rolldir\n" if $opt_v > 0;
     dir_setup();
+
     # initialize roll serial number $rollnum
+    #
     roll_setup();
 
     # setup ExifTool
@@ -214,14 +228,11 @@ MAIN: {
 #
 #	$srcdir		where images are from
 #	$desdir		where copied and renamed files go
-#	$rolldir	$destdir/roll under where symlinks are formed
 #
 # sets these global values:
 #
 #	$destdev	device of $destdir
 #	$destino	inode number of $destdir
-#	$rolldev	device of $rolldir
-#	$rollino	inode number of $rolldir
 #
 # NOTE: Does not return on error.
 #
@@ -259,18 +270,6 @@ sub dir_setup()
     # record the device and inode number of $destdir
     #
     ($destdev, $destino,) = stat($destdir);
-
-    # setup the roll symlink dir if needed
-    #
-    ($errcode, $errmsg) = form_dir($rolldir);
-    if ($errcode != 0) {
-	print STDERR "$0: mkdir error: $errmsg for $rolldir\n";
-	exit(12);
-    }
-
-    # record the device and inode number of $rolldir
-    #
-    ($rolldev, $rollino,) = stat($rolldir);
     return;
 }
 
@@ -280,19 +279,17 @@ sub dir_setup()
 # This function is a callback from the File::Find directory tree walker.
 # It will walk the $srcdir and copy/rename files as needed.
 #
-# We we process files under $srcdir, we copy them to $destdir and
-# we build up the symlink tree under $rolldir.
+# We we process files under $srcdir, we copy them to $destdir.
 #
 # uses these globals:
 #
 #	$opt_c		see -c in program usage at top
 #	$opt_e		see -e in program usage at top
 #	$opt_f		see -f in program usage at top
-#	$opt_m		see -m in program usage at top
+#	$opt_o		see -o in program usage at top
 #	$opt_t		see -t in program usage at top
 #	$srcdir		where images are from
 #	$desdir		where copied and renamed files go
-#	$rolldir	$destdir/roll under where symlinks are formed
 #	$rollnum	EXIF roll number
 #	$exiftool	Image::ExifTool object
 #
@@ -303,77 +300,56 @@ sub dir_setup()
 # Assume that the EXIF timestamp (or file timestamp if if lacks
 # EXIF timestamp tags) is:
 #
-#	2005-05-15 15:25:45 UTC
+#	2005-05-12 15:25:45 UTC
 #
 # Then we will create the file:
 #
-#    /destdir/2005/200505/20050515/20050515-152545-r0043-101eos1d-ls1f5627.cr2
+#    /destdir/200505/043-101/200505-043-101-12-152545-ls1f5627.cr2
 #
 # The created file path is:
 #
 #	/destdir			# destdir path of image library
-#	/2005				# image year
 #	/200505				# image year & month
-#	/20050515			# image year & month & day
-#	/20050515-152545-r0043-101eos1d-ls1f5627.cr2	# image filename
-#
-# The directory tree /top/YYYY/YYYYMM/YYYYMMDD repeats the date down 3 levels
-# so that one can know in what date range you are dealing with at each
-# level.  If this were not done, and say you were looking at a directory
-# with 05 and 09 in it, you would not know if those were days or months
-# and under what year you are desiding.  But because they would be
-# 200505 and 200509 you know they are months and you are under year 2005.
+#	/043-101			# roll-subdir
+#	/200505-043-101-12-152545-ls1f5627.cr2	# image filename (see below)
 #
 # The filename itself:
 #
-#	20050515-152545-r0043-101eos1d-ls1f5627.cr2
+#	200505-043-101-12-152545-ls1f5627.cr2
+#
+# If another image was taken during the same second, its name becomes:
+#
+#	200505-043-101-12-152545_1-ls1f5628.cr2
 #
 # is constructed out of the following:
 #
 #	2005			# image 4 digit Year
 #	05			# image month, 2 digits [01-12]
-#	15			# image day of month, 2 digits [01-31]
-#	-			# 1st separator
+#	-			# (dash) 1st separator
+#	043			# roll number, 3 digits, 0 padded
+#	-			# (dash) 2nd separator
+#	101			# lowercase top subdir w/o -'s, or empty
+#				# and eos\w+ suffix removed
+#	-			# (dash) 3rd separator
+#	12			# image day of month, 2 digits [01-31]
+#	-			# (dash) 4th separator
 #	15			# image hour (UTC), 2 digits [00-23]
 #	25			# image minute of hour, 2 digits [00-59]
-#	45			# image second of minute, 2 digits [00-60]
-#	-			# 2nd separator
-#	r			# indicaters roll
-#	0043			# image set number, 4 or more digits
-#	-			# 3rd separator
-#	101eos1d		# lowercase top level subdir w/o -'s or empty
-#	-			# 4th separator
-#	ls1f5627.cr2		# image basename, in lower case
+#	45			# image seconf of minites, 2 digits [00-60]
+#	     _			# (underscore) optional for dups in same sec
+#	     9			# optional digits for dups in same sec
+#	-			# (dash) 5th separator
+#	ls1f5627.cr2		# image basename, in lower case w/o -'s
 #
-# In addition, a symlink is setup under rolldir as follows:
-#
-#   /destdir/roll/r0043/101eos1d/20050515-152545-r0043-101eos1d-ls1f5627.cr2 ->
-#  ../../../2005/200505/20050515/20050515-152545-r0043-101eos1d-ls1f5627.cr2
-#
-# Note that the symlink filename basename is the same as the destination
-# filename.
-#
-# The symlink path is:
-#
-#	/destdir	# destdir path of image library
-#	/roll		# roll sub-tree within the image library
-#	/r0043		# roll number, r + 4 or more digits
-#	/101eos1d	# 1st directory under srcdir/DCIM,
-#			# or 1st directory under srcdir if no DCIM
-#			# or nothing at all if image was just under srcdir
-#			# converted to lower case
-#			# with all -'s removed
-#	# ...		# any further directories are preserved, and
-#			# converted to lower case as well
-#	/basename	# image basename
-#
-# The 4 or more digit roll serial number from the file:
+# The 3 digit roll serial number from the file:
 #
 #	~/.exifroll
 #
-# It if initialized to 0000 if that file does not exist.  The current
-# value is used to form the rWXYZ path component and then is incremented
-# by 1.
+# The roll is initialized to 000 if that file does not exist.  The current
+# value in the file is used to form the roll number component.  The value
+# in the roll number file is incremented by one in preparation for next use.
+#
+####
 #
 # NOTE: The EOS 1D Canon Image filesystem, without any images looks like:
 #
@@ -399,31 +375,37 @@ sub dir_setup()
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and symlinks in destdir.
 #
-# NOTE:
-#	$File::Find::dir	current directory name
+####
+#
+# NOTE: The File::Find calls this function with this argument:
+#
 #	$_			current filename within $File::Find::dir
+#
+# and these global vaules set:
+#
+#	$File::Find::dir	current directory name
 #	$File::Find::name 	complete pathname to the file
 #	$File::Find::prune	set 1 one to prune current node out of path
 #	$File::Find::topdir	top directory path ($srcdir)
 #	$File::Find::topdev	device of the top directory
 #	$File::Find::topino	inode number of the top directory
 #
+# XXX - tie non image files to their image parent dates?
+#
 sub wanted()
 {
     my $filename = $_;		# current filename within $File::Find::dir
     my $pathname;		# complete path $File::Find::name
-    my $subpath;		# filename path under $srcdir/DCIM or $srcdir
     my $nodedev;		# device of the current file
     my $nodeino;		# inode number of the current file
-    my $roll;			# roll path to form below $rolldir
-    my $topsubdir;		# lead dir of subpath, lower case, -'s removed
+    my $roll_sub;		# roll-subdir
     my ($errcode, $errmsg);	# form_dir return values
 
     # canonicalize the path by removing leading ./ and multiple //'s
     #
     print "DEBUG: wanted filename: $filename\n" if $opt_v > 3;
     print "DEBUG: wanted given $File::Find::name\n" if $opt_v > 2;
-    ($pathname = $File::Find::name) =~ s|^\./||;
+    ($pathname = $File::Find::name) =~ s|^(\./)+||;
     $pathname =~ s|//+|/|g;
     print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
 
@@ -432,20 +414,6 @@ sub wanted()
     if (! -d $filename && ! -f $filename) {
 	# skip non-dir/non-files
 	print "DEBUG: prune #0 $pathname\n" if $opt_v > 2;
-	$File::Find::prune = 1;
-	return;
-    }
-
-    # prune out destdir and rolldir
-    #
-    # If we hapened to walk into our destination directory, prune
-    # as we do not want to get into a recursive copy loop.
-    #
-    ($nodedev, $nodeino, ) = stat($filename);
-    if (($nodedev == $destdev && $nodeino == $destino) ||
-        ($nodedev == $rolldev && $nodeino == $rollino)) {
-	# avoid recursion, skip walking into $destdir or $rolldir
-	print "DEBUG: prune #1 $pathname\n" if $opt_v > 2;
 	$File::Find::prune = 1;
 	return;
     }
@@ -489,150 +457,154 @@ sub wanted()
     	return;
     }
 
-    # For a directory that we do not ignore, we will make a
-    # directory under out rolldir.  This rolldir will consist
-    # of the path under $srcdir without a top level DCIM component.
-    # For a file that we do not ignore, we will make a
-    # symlink within a directory under rolldir.
+    # Determine the top level directory under $srcdir/DCIM or $srcdir,
+    # in lowercase without -'s
     #
-    # That is, we will look at the path beyond $srcdir/DCIM
-    # if $pathname begins with $srcdir/DCIM, otherwise we
-    # will look at the path beyond just $srcdir to determine
-    # the roll directory we need.
-    #
-    # This code sets $roll to be the path of the directory
-    # or symlink that we need to form.
-    #
-    if ($pathname =~ m|^$srcdir/DCIM/(.+)$|o) {
-	$subpath = $1;
-	$roll = "$rolldir/$1";		# path beyond $srcdir/DCIM/
+    if ($pathname =~ m|^$srcdir/DCIM/(.+)/$|o) {
+	$roll_sub = $1;
+    } elsif ($pathname =~ m|^$srcdir/(.+)/$|o) {
+	$roll_sub = $1;
     } elsif ($pathname =~ m|^$srcdir/(.+)$|o) {
-	$subpath = $1;
-	$roll = "$rolldir/$1";		# path beyond $srcdir/
+	$roll_sub = "";
     } else {
 	print STDERR "$0: Fatal $pathname not under $srcdir\n";
-	print "DEBUG: prune #6 $pathname\n" if $opt_v > 0;
+	print "DEBUG: prune #13 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(13) unless defined $opt_e;
 	return;
     }
-    print "DEBUG: roll directory: $roll\n" if $opt_v > 2;
-    print "DEBUG: subpath: $subpath\n" if $opt_v > 3;
-
-    # Determine the top level directory under $srcdir/DCIM or $srcdir,
-    # in lowercase without -'s
-    #
-    if ($subpath =~ m|^([^/]+)/|) {
-	# remove -'s from the top level directory name
-    	($topsubdir = $1) =~ s/-//g;
-    } else {
-    	# no subdir, use empty string
-    	$topsubdir = "";
-    }
-    $topsubdir = tr/[A-Z]/[a-z]/;
-    print "DEBUG: top level subdir: $topsubdir\n" if $opt_v > 3;
-
-    # directory processing
-    #
-    # We assume we are walking the tree from top down.  We depend on
-    # creating the roll directory before we find image files and
-    # create symlinks under it.
-    #
-    if (-d $filename) {
-
-	# create the roll subdir if needed
-	#
-	($errcode, $errmsg) = form_dir($roll);
-	if ($errcode != 0) {
-	    print STDERR "$0: Fatal: mkdir error: $errmsg for $roll\n";
-	    print "DEBUG: prune #7 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(14) unless defined $opt_e;
-	    return;
-	}
+    $roll_sub = tr/[A-Z]/[a-z]/;	# conver to lower case
+    $roll_sub =~ s/eos\w+$//;	# remove common EOS trailing chars
+    $roll_sub =~ s/-//g;	# no extra -'s
+    $roll_sub = "$rollnum-$roll_sub";
+    print "DEBUG: top level subdir: $roll_sub\n" if $opt_v > 2;
 
     # file processing
     #
-    } else {
+    if (-f $filename) {
 	my $lowerfilename;	# lower case filename
 	my $levels;	# directoy levels under $srcdir/DCIM or $srcdir
 	my $datecode;	# exif_date error code or 0 ==> OK
 	my $datestamp;	# EXIF or filename timestamp of OK, or error msg
-	my $yyyy;	# EXIF or filename timestamp year
 	my $yyyymm;	# EXIF or filename timestamp year and month
-	my $yyyymmdd;	# EXIF or filename timestamp year and month and day
+	my $dd;		# EXIF or filename timestamp day
+	my $hhmmss;	# EXIF or filename timestamp time
+	my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
+	my $dupnum;	# -# de-duplication number
 	my $destname;	# the destination filename to form
 	my $destpath;	# the full path of the destination file
-	my $srcsym;	# the destination file being symlinked to
-	my $destsym;	# the symlink file to form under rolldir
 
 	# determine the date of the image by EXIF or filename date
 	#
-	($datecode, $datestamp) = exif_date($exiftool, $filename);
+	($datecode, $datestamp) = timestamp($exiftool, $filename);
 	if ($datecode != 0) {
 	    print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
 	    		 "$datestamp\n";
-	    print "DEBUG: prune #8 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(15) unless defined $opt_e;
 	    return;
 	}
 	print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
 
-	# form the destination filename and destination path
+	# canonicalize the filename
 	#
-	($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;
-	$yyyy = strftime("%Y", gmtime($datestamp));
-	$yyyymm = $yyyy . strftime("%m", gmtime($datestamp));
-	$yyyymmdd = $yyyymm . strftime("%d", gmtime($datestamp));
-	$destname = "$yyyymmdd-" . strftime("%H%M%S", gmtime($datestamp)) .
-		    "-r$rollnum-$topsubdir-$lowerfilename";
-	$destpath = "$destdir/$yyyy/$yyyymm/$yyyymmdd/$destname";
-	print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
+	($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
 
-	# ensure the $destdir/yyyy/yyyymm/yyyymmdd direct path exists
+	# If the lowercase name is already of the form:
 	#
-	($errcode, $errmsg) = form_dir("$destdir/$yyyy");
+	#	200505-043-101-12-152545_1-ls1f5628.cr2
+	#
+	# convert it to just ls1f5628.cr2 so that we won't keep adding
+	# date strings to the filename.
+	#
+	if ($lowerfilename =~ /^\d{6}-\d{3}-[^-]+-\d{2}-\d{6}(_\d+)?-(.*)$/) {
+	    $lowerfilename = $2;
+	}
+
+	# Remove any -'s in the lowercase name so as to not confuse
+	# a filename field parser.
+	#
+	$lowerfilename =~ s/-//g;
+
+	# convert the timestamp into date strings
+	#
+	$yyyymm = strftime("%Y%m", gmtime($datestamp));
+	$dd = strftime("%d", gmtime($datestamp));
+
+	# ensure the $destdir/yyyymm/rol-sub direct path exists
+	#
+	($errcode, $errmsg) = form_dir("$destdir/$yyyymm");
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
-	    		 "$destdir/$yyyy\n";
-	    print "DEBUG: prune #9 $pathname\n" if $opt_v > 0;
+	    		 "$destdir/$yyyymm\n";
+	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(16) unless defined $opt_e;
 	    return;
 	}
-	($errcode, $errmsg) = form_dir("$destdir/$yyyy/$yyyymm");
+	($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
 	if ($errcode != 0) {
 	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
-	    		 "$destdir/$yyyy/$yyyymm\n";
-	    print "DEBUG: prune #10 $pathname\n" if $opt_v > 0;
+	    		 "$destdir/$yyyymm/$roll_sub\n";
+	    print "DEBUG: prune #17 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(17) unless defined $opt_e;
-	    return;
-	}
-	($errcode, $errmsg) = form_dir("$destdir/$yyyy/$yyyymm/$yyyymmdd");
-	if ($errcode != 0) {
-	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
-	    		 "$destdir/$yyyy/$yyyymm/$yyyymmdd\n";
-	    print "DEBUG: prune #11 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(18) unless defined $opt_e;
 	    return;
 	}
 
 	# deal with the case of when the destination file already exists
 	#
-	if (-f "$destpath") {
-	    print "DEBUG: dest file exists: $destdir/$filename\n" if $opt_v > 1;
-	    unlink "$destpath" if $opt_f;
-	    if (-f "$destpath") {
-		print STDERR "$0: Fatal: desitnation exists: $destpath\n";
-		print "DEBUG: prune #12 $pathname\n" if $opt_v > 0;
+	# If the filename exists, start adding _X for X 0 to 99
+	# after the seconds.
+	#
+	$hhmmss = strftime("%H%M%S", gmtime($datestamp));
+	$hhmmss_d = $hhmmss;	# assume no de-dup is needed
+	$dupnum = 0;
+	do {
+	    # determine destination filename and full path
+	    #
+	    $destname = "$yyyymm-$roll_sub-$dd-$hhmmss_d-$lowerfilename";
+	    $destpath = "$destdir/$yyyymm/$roll_sub/$destname";
+
+	    # prep for next cycle if destination already exits
+	    #
+	    if (-e $destpath) {
+		print "DEBUG: dest file exists: $destpath\n" if $opt_v > 4;
+		$hhmmss_d = $hhmmss . "_" . ++$dupnum;
+
+		# if -o, then try to remove the old desitnation
+		#
+		if (defined $opt_o) {
+		    if (-f $destpath) {
+			print "DEBUG: -o pre-remove: $destpath\n" if $opt_v > 4;
+			unlink $destpath;
+			if ($opt_v > 4 && -f $destpath) {
+			    print "DEBUG: cannot pre-remove: $destpath: $!\n";
+			}
+		    } else {
+			print "DEBUG: will not -o pre-remove ",
+			      "a non-file: $destpath\n" if $opt_v > 4;
+		    }
+		    if ($opt_v > 4 && -e $destpath) {
+			print "DEBUG: we must try another filename\n";
+		    }
+		}
+	    }
+
+	    # firewall - do not allow more than 99 duplicates
+	    #
+	    if ($dupnum > 99) {
+		print STDERR "$0: Fatal: more than 99 duplicates for ",
+			     "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
+		print "DEBUG: prune #18 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
-		exit(19) unless defined $opt_e;
+		exit(18) unless defined $opt_e;
 		return;
 	    }
-	}
+	} while (-e "$destpath");
+	print "DEBUG: destination: $destname\n" if $opt_v > 1;
+	print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
 
 	# copy (or move of -m) the image file
 	#
@@ -640,7 +612,7 @@ sub wanted()
 	    if (move($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "mv $filename $destpath failed: $!\n";
-		print "DEBUG: prune #13 $pathname\n" if $opt_v > 0;
+		print "DEBUG: prune #20 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(20) unless defined $opt_e;
 		return;
@@ -649,7 +621,7 @@ sub wanted()
 	    if (copy($pathname, $destpath) == 0) {
 		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			     "cp $filename $destpath failed: $!\n";
-		print "DEBUG: prune #14 $pathname\n" if $opt_v > 0;
+		print "DEBUG: prune #21 $pathname\n" if $opt_v > 0;
 		$File::Find::prune = 1;
 		exit(21) unless defined $opt_e;
 		return;
@@ -661,7 +633,7 @@ sub wanted()
 	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "compare of $filename and $destpath failed\n";
-	    print "DEBUG: prune #15 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: prune #22 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
 	    exit(22) unless defined $opt_e;
 	    return;
@@ -671,20 +643,6 @@ sub wanted()
 	#
 	if (! defined $opt_t) {
 	    utime $datestamp, $datestamp, $destpath;
-	}
-
-	# form the symlink
-	#
-	($levels = $subpath) =~ s|[^/]+||g;
-	$levels = length($levels);
-	$srcsym = ("../" x ($levels+2)) . "$yyyy/$yyyymm/$yyyymmdd/$destname";
-	$destsym = "$roll/$destname";
-	if (symlink($srcsym, $destsym) != 1) {
-	    print STDERR "$0: Fatal: ln -s $srcsym $destdir failed: $!\n";
-	    print "DEBUG: prune #16 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(23) unless defined $opt_e;
-	    return;
 	}
     }
     return;
@@ -720,7 +678,39 @@ sub exif_setup()
 }
 
 
-# exif_date - determine a file date string using EXIF and file timestamps
+# timestamp - determine a file date string using EXIF and file timestamps
+#
+# We will first look at EXIF data for a timestamp.  If none is found
+# we will look for a readable related filename that is likely to have
+# EXIF data.  If none is found, we will try to use the file's creation
+# or modification timestamps.
+#
+# A common reason for lack of EXIF data is that the file in question
+# is not a file that the type of file that has EXIF data.  Cameras
+# that allow one to record sound will create audio files.  Such audio
+# files do not contain any EXIF data.
+#
+# It is frequently the case that non-EXIF files created by cameras
+# have a filename that is similar to an image file.  For example on
+# the Canon EOS 1D Mark II, one may have an image file "ls1f5627.cr2"
+# and a related sound file "ls1f5627.wav".  It would be useful to
+# associate the wav file with the image file.  Therefore an attempt
+# will be made to look for a corresponding EXIF image file when
+# a non-EXIF file is found.
+#
+# When we are called, we will look for a readable file that has the same
+# basename as our $filename arg, but with an extension that implies
+# it is an image file.  For example, if we are called with a filename of
+# "/.../ls1f5627.wav", we will look for readable files such as
+# "/.../ls1f5627.cr2", "/.../ls1f5627.jpg", etc.
+#
+# The order of extensions is defined by the @exif_ext array.  We will
+# search for readable files in order of that array.  If we find a
+# readable file that has a valid EXIF timestamp, we will use that
+# timestamp.  Otherwise we will keep looking through the rest of the
+# @exif_ext array.  If and only if we reach the end of the @exif_ext
+# array without a valid EXIF timestamp, then we will look at the
+# create/modify timestamp.
 #
 # given:
 #	$exiftool	Image::ExifTool object
@@ -728,12 +718,89 @@ sub exif_setup()
 #
 # returns:
 #	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
-#	    $message:	date string of $exitcode, else error message
+#	    $exitcode:	0 ==> OK, else ==> exit code
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub timestamp($$)
+{
+    my ($exiftool, $filename) = @_;	# get args
+    my $noext;			# filename without any extension
+    my $exif_file;		# a potential EXIF related filename
+    my $extension;		# a potential EXIF related file extension
+    my $errcode;		# 0 ==> OK
+    my $timestamp = -1;	# seconds since the epoch of early tstamp or -1
+
+    # try to get an EXIF based timestamp
+    #
+    ($errcode, $timestamp) = exif_date($exiftool, $filename);
+    if ($errcode == 0) {
+	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
+	return (0, $timestamp);
+    }
+    print "DEBUG: EXIF timestamp $filename: error: $errcode: ",
+    	  "$timestamp\n" if $opt_v > 4;
+
+    # look for related files that might have EXIF data
+    #
+    ($noext = $filename) =~ s|\.[^./]*$||;
+    foreach $extension ( @exif_ext ) {
+
+	# Look for a related readable file that is likely to have
+	# EXIF data in it ... and only if that related filename
+	# is not exactly the same as our filename argument.
+	$exif_file = "$noext.$extension";
+	if ($exif_file ne $filename && -r $exif_file) {
+	    my $errcode;		# 0 ==> OK
+	    my $timestamp;		# timestamp or error msg
+
+	    # try to get an EXIF based timestamp
+	    #
+	    print "DEBUG: looking at related filename: $exif_file\n"
+	    	if $opt_v > 4;
+	    ($errcode, $timestamp) = exif_date($exiftool, $exif_file);
+
+	    # return EXIF data if we were able to find a good timestamp
+	    #
+	    if ($errcode == 0) {
+		print "DEBUG: found related EXIF timestamp in $exif_file: ",
+			"$timestamp\n" if $opt_v > 4;
+		return (0, $timestamp);
+	    }
+	    print "DEBUG: EXIF timestamp $filename: EXIF code: $errcode: ",
+		  "$timestamp\n" if $opt_v > 5;
+	}
+    }
+    print "DEBUG: found no related EXIF file for: $filename\n" if $opt_v > 4;
+
+    # use the file method and return whatever it says
+    #
+    ($errcode, $timestamp) = file_date($filename);
+    if ($opt_v > 4) {
+	if ($errcode == 0) {
+	    print "DEBUG: timestamp for file: $filename: $timestamp\n";
+	} else {
+	    print "DEBUG: file timestamp: $filename: error: $errcode: ",
+	    	  "$timestamp\n";
+	}
+    }
+    return ($errcode, $timestamp);
+}
+
+
+# exif_date - determine a file date string using EXIF data
+#
+# given:
+#	$exiftool	Image::ExifTool object
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
+#	    $message:	$exitcode==0 ==> timestamp, else error message
 #
 sub exif_date($$)
 {
-    my ($exiftool, $filename) = @_;	# get arg
+    my ($exiftool, $filename) = @_;	# get args
     my $info;		# exiftool extracted EXIF information
     my $tag;		# EXIF tag name
     my $timestamp = -1;	# seconds since the epoch of early tstamp or -1
@@ -742,19 +809,23 @@ sub exif_date($$)
     #
     if (! -e $filename) {
 	# NOTE: exit(24) for unable to open filename
-	return(24, "cannot open");
+	return (24, "cannot open");
     }
     if (! -r $filename) {
 	# NOTE: exit(25) for unable to read filename
-	return(25, "cannot read");
+	return (25, "cannot read");
     }
 
     # extract meta information from an image
     #
     $info = $exiftool->ImageInfo($filename, @tag_list);
     if (! defined $info || defined $$info{Error}) {
-	# failure to get a EXIF data, use file dates instead
-	return file_date($filename);
+	# failure to get a EXIF data
+	if (defined $$info{Error}) {
+	    return (26, "EXIF data error: $$info{Error}");
+        } else {
+	    return (27, "no EXIF data");
+	}
     }
 
     # look at each EXIF tag value we found
@@ -772,17 +843,19 @@ sub exif_date($$)
 	    $timestamp = $$info{$tag};
         }
     }
-
-    # If we did not find any reasonable EXIF timestamp data, then we
-    # must use the file name
-    #
     if ($timestamp < 0) {
-	return file_date($filename);
+	return (28, "no timestamp in EXIF data");
+    }
+
+    # Avoid very old EXIF timestamps
+    #
+    if ($timestamp < $mintime) {
+	return (29, "timestamp: $timestamp < min: $mintime");
     }
 
     # return the EXIF timestamp
     #
-    return(0, $timestamp);
+    return (0, $timestamp);
 }
 
 
@@ -794,7 +867,7 @@ sub exif_date($$)
 # returns:
 #	($exitcode, $message)
 #	    $exitcode:	0 ==> OK, =! 0 ==> exit code
-#	    $message:	date string of $exitcode, else error message
+#	    $message:	$exitcode==0 ==> timestamp, else error message
 #
 sub file_date($)
 {
@@ -802,15 +875,11 @@ sub file_date($)
     my $mtime;			# modify timestamp
     my $ctime;			# create timestamp
 
-    # firewall - file must be readable
+    # firewall - file must exist
     #
     if (! -e $filename) {
 	# NOTE: exit(26) for unable to open filename
-	return(26, "cannot open");
-    }
-    if (! -r $filename) {
-	# NOTE: exit(27) for unable to read filename
-	return(27, "cannot read");
+	return (26, "cannot open");
     }
 
     # stat the file
@@ -822,18 +891,23 @@ sub file_date($)
     #
     if (defined $ctime && $ctime >= $mintime) {
 	# use create time
-	return(0, $ctime);
+	print "DEBUG: using: $filename: create timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $ctime);
 
     # next try the modify timestamp
     #
     } elsif (defined $mtime && $mtime >= $mintime) {
 	# use modify time
-	return(0, $mtime);
+	print "DEBUG: using: $filename: modify timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $mtime);
     }
 
     # we cannot find a useful file timestamp
     #
-    return(5, "file is too old");
+    print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
+    return (30, "file is too old");
 }
 
 
@@ -856,18 +930,18 @@ sub form_dir($)
     if (-e $dir_name && ! -d $dir_name) {
 	print STDERR "$0: is a non-directory: $dir_name\n";
 	# NOTE: exit(28): non-directory
-	return (28, "is a non-directory");
+	return (31, "is a non-directory");
     }
     if (! -d $dir_name) {
 	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
         if (! mkdir($dir_name, 0775)) {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
 	    # NOTE: exit(29): mkdir error
-	    return (29, "cannot mkdir");
+	    return (32, "cannot mkdir");
 	} elsif (! -w $dir_name) {
 	    print STDERR "$0: directory is not writable: $dir_name\n";
 	    # NOTE: exit(30): dir not writbale
-	    return (30, "directory is not writable");
+	    return (33, "directory is not writable");
 	}
     }
     # all is OK
@@ -886,7 +960,7 @@ sub roll_setup()
 {
     # process an existing ~/.exifroll file
     #
-    $rollnum = "0000";	# default initial roll number
+    $rollnum = "000";	# default initial roll number
     if (-e $opt_r) {
 
 	# firewall - must be readable
@@ -911,12 +985,12 @@ sub roll_setup()
 	$rollnum = <EXIFROLL>;
 	close EXIFROLL;
 
-	# assume roll number of 0000 if bad line or no line
+	# assume roll number of 000 if bad line or no line
 	#
-	if ($rollnum !~ /^\d{4}$/) {
+	if ($rollnum !~ /^\d{3}$/) {
 	    print STDERR "$0: Warning: invalid roll number in $opt_r\n";
-	    print STDERR "$0: will use roll number 0000 instead\n";
-	    $rollnum = "0000";
+	    print STDERR "$0: will use roll number 000 instead\n";
+	    $rollnum = "000";
 	}
     }
 
@@ -926,9 +1000,18 @@ sub roll_setup()
 	print STDERR "$0: cannot open for writing exifroll: $opt_r: $!\n";
 	exit(34);
     }
-    if (! print EXIFROLL $rollnum+1, "\n") {
-	print STDERR "$0: cannot write next rollnum to exifroll: $opt_r: $!\n";
-	exit(35);
+    if ($rollnum > 999) {
+	if (! print EXIFROLL "000", "\n") {
+	    print STDERR "$0: cannot write 000 rollnum ",
+	    		 "to exifroll: $opt_r: $!\n";
+	    exit(35);
+	}
+    } else {
+	if (! print EXIFROLL $rollnum+1, "\n") {
+	    print STDERR "$0: cannot write next rollnum ",
+	    		 "to exifroll: $opt_r: $!\n";
+	    exit(36);
+	}
     }
     close EXIFROLL;
     print "DEBUG: roll number: $rollnum\n" if $opt_v > 0;
