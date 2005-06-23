@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.9 $
-# @(#) $Id: exifrename.pl,v 1.9 2005/06/20 17:27:06 chongo Exp chongo $
+# @(#) $Revision: 1.11 $
+# @(#) $Id: exifrename.pl,v 1.11 2005/06/20 21:10:24 chongo Exp chongo $
 # @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -43,10 +43,11 @@ no warnings 'File::Find';
 use File::Copy;
 use File::Compare;
 use File::Basename;
+use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.9 $, 10;
+my $VERSION = substr q$Revision: 1.11 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -58,6 +59,11 @@ my $destino;	# inode numner of $destdir
 my $rollnum;	# EXIF roll number
 my $exiftool;	# Image::ExifTool object
 my $untaint = qr|^([-+@\w./]+)$|; 	# untainting path pattern
+my $datelines = 16;	# date: must be in the 1st datelines of a file
+my %mname = (
+    "Jan" => 0, "Feb" => 1, "Mar" => 2, "Apr" => 3, "May" => 4, "Jun" => 5,
+    "Jul" => 6, "Aug" => 7, "Sep" => 8, "Oct" => 9, "Nov" => 10, "Dec" => 11,
+);
 
 
 # EXIF timestamp related tag names to look for
@@ -126,6 +132,7 @@ sub dir_setup();
 sub timestamp($);
 sub exif_date($);
 sub file_date($);
+sub text_date($);
 sub form_dir($);
 sub roll_setup();
 
@@ -319,41 +326,40 @@ sub dir_setup()
 #
 # Then we will create the file:
 #
-#    /destdir/200505/043-101/200505-043-101-12-152545-ls1f5627.cr2
+#    /destdir/200505/043-101/043-101-20050512-152545-ls1f5627.cr2
 #
 # The created file path is:
 #
 #	/destdir			# destdir path of image library
 #	/200505				# image year & month
 #	/043-101			# roll-subdir
-#	/200505-043-101-12-152545-ls1f5627.cr2	# image filename (see below)
+#	/043-101-20050512-152545-ls1f5627.cr2	# image filename (see below)
 #
 # The filename itself:
 #
-#	200505-043-101-12-152545-ls1f5627.cr2
+#	043-101-20050512-152545-ls1f5627.cr2
 #
 # If another image was taken during the same second, its name becomes:
 #
-#	200505-043-101-12-152545_1-ls1f5628.cr2
+#	043-101-20050512-152545_1-ls1f5628.cr2
 #
 # is constructed out of the following:
 #
-#	2005			# image 4 digit Year
-#	05			# image month, 2 digits [01-12]
-#	-			# (dash) 1st separator
 #	043			# roll number, 3 digits, 0 padded
-#	-			# (dash) 2nd separator
+#	-			# (dash) separator
 #	101			# lowercase top subdir w/o -'s, or empty
 #				# and eos\w+ suffix removed
-#	-			# (dash) 3rd separator
+#	-			# (dash) separator
+#	2005			# image 4 digit Year
+#	05			# image month, 2 digits [01-12]
 #	12			# image day of month, 2 digits [01-31]
-#	-			# (dash) 4th separator
+#	-			# (dash) separator
 #	15			# image hour (UTC), 2 digits [00-23]
 #	25			# image minute of hour, 2 digits [00-59]
 #	45			# image seconf of minites, 2 digits [00-60]
 #	     _			# (underscore) optional for dups in same sec
-#	     9			# optional digits for dups in same sec
-#	-			# (dash) 5th separator
+#	     1			# optional digits for dups in same sec
+#	-			# (dash) separator
 #	ls1f5627.cr2		# image basename, in lower case w/o -'s
 #
 # The 3 digit roll serial number from the file:
@@ -462,17 +468,17 @@ sub wanted()
     #
     if ($filename eq ".") {
 	# ignore but do not prune directories
-	print "DEBUG: . ignore #4 $pathname\n" if $opt_v > 3;
+	print "DEBUG: . ignore #6 $pathname\n" if $opt_v > 3;
     	return;
     }
     if ($filename eq "..") {
 	# ignore but do not prune directories
-	print "DEBUG: .. ignore #5 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .. ignore #7 $pathname\n" if $opt_v > 3;
     	return;
     }
     if ($filename eq "DCIM") {
 	# ignore but do not prune directories
-	print "DEBUG: DCIM ignore #6 $pathname\n" if $opt_v > 3;
+	print "DEBUG: DCIM ignore #8 $pathname\n" if $opt_v > 3;
     	return;
     }
 
@@ -480,7 +486,7 @@ sub wanted()
     #
     if (! -f $filename) {
 	# ignore but do not prune directories
-	print "DEBUG: dir ignore #7 $pathname\n" if $opt_v > 3;
+	print "DEBUG: dir ignore #9 $pathname\n" if $opt_v > 3;
     	return;
     }
 
@@ -566,19 +572,16 @@ sub wanted()
 
 	# If the lowercase name is already of the form:
 	#
-	#	200505-043-101-12-152545_1-ls1f5628.cr2
+	#	043-101-20050512-152545-ls1f5628.cr2
+	#	043-101-20050512-152545_1-ls1f5628.cr2
 	#
 	# convert it to just ls1f5628.cr2 so that we won't keep adding
 	# date strings to the filename.
 	#
-	if ($lowerfilename =~ /^\d{6}-\d{3}-[^-]+-\d{2}-\d{6}(_\d+)?-(.*)$/) {
+	if ($lowerfilename =~ /^\d{3}-[^-]+-\d{8}-\d{6}(_\d+)?-(.*)$/) {
 	    $lowerfilename = $2;
 	}
-
-	# Remove any -'s in the lowercase name so as to not confuse
-	# a filename field parser.
-	#
-	$lowerfilename =~ s/-//g;
+	$lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
 
 	# convert the timestamp into date strings
 	#
@@ -629,10 +632,10 @@ sub wanted()
 	do {
 	    # determine destination filename and full path
 	    #
-	    $destname = "$yyyymm-$roll_sub-$dd-$hhmmss_d-$lowerfilename";
+	    $destname = "$roll_sub-$yyyymm$dd-$hhmmss_d-$lowerfilename";
 	    $destpath = "$destdir/$yyyymm/$roll_sub/$destname";
 
-	    # prep for next cycle if destination already exits
+	    # prep for next cycle if destination already exists
 	    #
 	    if (-e $destpath) {
 		print "DEBUG: dest file exists: $destpath\n" if $opt_v > 4;
@@ -764,6 +767,8 @@ sub wanted()
 # array without a valid EXIF timestamp, then we will look at the
 # create/modify timestamp.
 #
+# NOTE: The non-EXIF and related EXIF files must be in the same directory.
+#
 # given:
 #	$filename	image filename to process
 #
@@ -785,6 +790,7 @@ sub timestamp($)
 
     # try to get an EXIF based timestamp
     #
+    print "DEBUG: looking for EXIF timestamp in $filename\n" if $opt_v > 4;
     ($errcode, $timestamp) = exif_date($filename);
     if ($errcode == 0) {
 	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
@@ -848,10 +854,25 @@ sub timestamp($)
     }
     print "DEBUG: found no related EXIF file for: $filename\n" if $opt_v > 4;
 
+    # If the file is a txt file or a file without an extension,
+    # then look for a Date: string in the early lines of the file.
+    #
+    if ($filename =~ /\.txt$/i || basename($filename) !~ /./) {
+	print "DEBUG: looking for text date in $filename\n" if $opt_v > 4;
+	($errcode, $timestamp) = text_date($filename);
+	if ($errcode == 0) {
+	    print "DEBUG: text timestamp for file: $filename: $timestamp\n"
+	        if $opt_v > 4;
+	    return (0, $timestamp);
+	}
+	print "DEBUG: no valid text date found in $filename\n" if $opt_v > 4;
+    }
+
     # No valid EXIF timestamps in the file or related readable files.
     # Try the file's creation / modification timestamp and return
     # whatever it says ... a timestamp or error.
     #
+    print "DEBUG: forced to use file timestamp for $filename\n" if $opt_v > 4;
     ($errcode, $timestamp) = file_date($filename);
     if ($opt_v > 4) {
 	if ($errcode == 0) {
@@ -889,12 +910,10 @@ sub exif_date($)
     # firewall - image file must be readable
     #
     if (! -e $filename) {
-	# NOTE: exit(25) for unable to open filename
-	return (25, "cannot open");
+	return (25, "cannot open");	# exit(25)
     }
     if (! -r $filename) {
-	# NOTE: exit(26) for unable to read filename
-	return (26, "cannot read");
+	return (26, "cannot read");	# exit(26)
     }
 
     # extract meta information from an image
@@ -903,9 +922,9 @@ sub exif_date($)
     if (! defined $info || defined $$info{Error}) {
 	# failure to get a EXIF data
 	if (defined $$info{Error}) {
-	    return (26, "EXIF data error: $$info{Error}");
+	    return (27, "EXIF data error: $$info{Error}");	# exit(27)
         } else {
-	    return (27, "no EXIF data");
+	    return (28, "no EXIF data");	# exit(28)
 	}
     }
 
@@ -942,13 +961,13 @@ sub exif_date($)
         }
     }
     if ($timestamp < 0) {
-	return (28, "no timestamp in EXIF data");
+	return (29, "no timestamp in EXIF data");	# exit(29)
     }
 
     # Avoid very old EXIF timestamps
     #
     if ($timestamp < $mintime) {
-	return (29, "timestamp: $timestamp < min: $mintime");
+	return (30, "timestamp: $timestamp < min: $mintime");	# exit(30)
     }
 
     # return the EXIF timestamp
@@ -976,8 +995,7 @@ sub file_date($)
     # firewall - file must exist
     #
     if (! -e $filename) {
-	# NOTE: exit(26) for unable to open filename
-	return (26, "cannot open");
+	return (31, "cannot open");	# exit(31)
     }
 
     # stat the file
@@ -1005,7 +1023,142 @@ sub file_date($)
     # we cannot find a useful file timestamp
     #
     print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
-    return (30, "file is too old");
+    return (32, "file is too old");	# exit(32)
+}
+
+
+# text_date - find a date: timestamp in the first few lines of a txt file
+#
+# We look in the first $datelines of a text file for a string of
+# the form:
+#
+#	# date: Xyz Mon dd HH:MM:SS ABC YYYY
+#	xx    xxxxxx		xxxxxxxx    xxx... <== x's mark optional fields
+#
+# The match is case insensitve.  The leading #(whitespace) is optional.
+# The Xyz (day of week) is optional.  The ABC timezone field is optional.
+#
+# given:
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub text_date($)
+{
+    my ($filename) = @_;	# get arg
+    my $line;			# line from the text file
+    my $i;
+
+    # firewall - image file must be readable
+    #
+    if (! -e $filename) {
+	return (33, "cannot open");	# exit(33)
+    }
+    if (! -r $filename) {
+	return (34, "cannot read");	# exit(34)
+    }
+
+    # open the text file
+    #
+    print "DEBUG: looking for date in text file: $filename\n" if $opt_v > 4;
+    if (! open TEXT, '<', $filename) {
+	return (35, "cannot open: $!");	# exit(35)
+    }
+
+    # read the 1st $datelines of a file looking for a timestamp
+    #
+    for ($i=0; $i < $datelines; ++$i) {
+
+	# read a line
+	#
+	if (! defined($line = <TEXT>)) {
+	    return (36, "EOF or text read error");	# exit(36)
+	}
+	chomp $line;
+	print "DEBUG: read text line $i in $filename: $line\n" if $opt_v > 6;
+
+	# look for a date string
+	#
+	#	# date: Xyz Mon dd HH:MM:SS ABC YYYY
+	#	xx    x xxxx		xxxxxxxx    xxx... <== optional fields
+	#
+	if ($line =~  m{
+		      ^
+		      (\#\s*)?	# 1: optional # space
+		      date(:)?	# 2: date with optional :
+		      \s*
+		      (\S+)?	# 3: optional day of week
+		      \s*
+		      (\S+)?	# 4: short name of month
+		      \s+
+		      (\d+)	# 5: day of month
+		      \s+
+		      (\d+)	# 6: hour of day
+		      :
+		      (\d+)	# 7: minute of hour
+		      (:\d+)?	# 8: optional :seconds
+		      \s+
+		      (\S+)?	# 9: optional timezone
+		      \s+
+		      (\d{4})	# 10: year
+		      }ix) {
+
+	    my $sec = $8;	# seconds field of 0 if not given
+	    my $min = $7;	# minite of hour
+	    my $hour = $6;	# hour of day
+	    my $mday = $5;	# day of month
+	    my $monname = $4;	# short name of month
+	    my $mon = -1;	# month of year [0..11]
+	    my $year = $10;	# year
+	    my $timestamp;	# date string coverted into a timestamp
+
+	    # convert short name of month to month number [0..11]
+	    #
+	    print "DEBUG: line $i, found possible date string in $filename: ",
+	    	   "$line\n" if $opt_v > 5;
+	    foreach ( keys %mname ) {
+		$mon = $mname{$_} if $monname =~ /^$_$/i;
+	    }
+	    if ($mon < 0) {
+		print "DEBUG: ignoring bad month name $monname on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+
+	    # fix seconds
+	    #
+	    if (defined $sec) {
+		$sec =~ s/\D//g;
+	    } else {
+		$sec = 0;
+	    }
+
+	    # convert fields to a timestamp
+	    #
+	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
+	    if (! defined $timestamp) {
+		print "DEBUG: ignoring malformed date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    if ($timestamp < $mintime) {
+		print "DEBUG: ignoring very early date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+
+	    # return the timestamp according to this date line we read
+	    #
+	    return (0, $timestamp);
+	}
+    }
+
+    # no date stamp found
+    #
+    return (37, "no date stamp found in initial lines");
 }
 
 
@@ -1027,19 +1180,16 @@ sub form_dir($)
     #
     if (-e $dir_name && ! -d $dir_name) {
 	print STDERR "$0: is a non-directory: $dir_name\n";
-	# NOTE: exit(28): non-directory
-	return (31, "is a non-directory");
+	return (35, "is a non-directory");	# exit(35)
     }
     if (! -d $dir_name) {
 	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
         if (! mkdir($dir_name, 0775)) {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
-	    # NOTE: exit(29): mkdir error
-	    return (29, "cannot mkdir");
+	    return (36, "cannot mkdir");	# exit(36)
 	} elsif (! -w $dir_name) {
 	    print STDERR "$0: directory is not writable: $dir_name\n";
-	    # NOTE: exit(30): dir not writbale
-	    return (30, "directory is not writable");
+	    return (37, "directory is not writable");	# exit(37)
 	}
     }
     # all is OK
