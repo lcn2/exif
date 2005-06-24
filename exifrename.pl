@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.11 $
-# @(#) $Id: exifrename.pl,v 1.11 2005/06/20 21:10:24 chongo Exp chongo $
+# @(#) $Revision: 1.12 $
+# @(#) $Id: exifrename.pl,v 1.12 2005/06/23 15:16:28 chongo Exp chongo $
 # @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,7 +34,7 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_e $opt_r);
+use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_e $opt_r $opt_s);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -47,7 +47,7 @@ use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.11 $, 10;
+my $VERSION = substr q$Revision: 1.12 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -58,12 +58,15 @@ my $destdev;	# device of $destdir
 my $destino;	# inode numner of $destdir
 my $rollnum;	# EXIF roll number
 my $exiftool;	# Image::ExifTool object
-my $untaint = qr|^([-+@\w./]+)$|; 	# untainting path pattern
+# NOTE: We will only cd into dirs whose name is only [-+\w\s./] chars
+my $untaint = qr|^([-+\w\s./]+)$|; 	# untainting path pattern
 my $datelines = 16;	# date: must be in the 1st datelines of a file
 my %mname = (
     "Jan" => 0, "Feb" => 1, "Mar" => 2, "Apr" => 3, "May" => 4, "Jun" => 5,
     "Jul" => 6, "Aug" => 7, "Sep" => 8, "Oct" => 9, "Nov" => 10, "Dec" => 11,
 );
+my $subdirchars = 3;	# number of initial chars of subdir to use in path
+my $rollfile;		# file that keeps track of next roll number
 
 
 # EXIF timestamp related tag names to look for
@@ -93,14 +96,16 @@ my $mintime = 500000000;
 
 # usage and help
 #
-my $usage = "$0 [-c][-e][-m][-o][-r rollfile][-t] [-h][-v lvl] srcdir destdir";
+my $usage = "$0 [-c][-e][-m][-o][-r rollfile][-s sdirlen][-t] \n" .
+	"\t[-h][-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
 	-c	     don't verify/compare files after they are copied (def: do)
-	-e	     don't abort on fatal errors (def: exit)
+	-e	     don't abort/exit after a fatal error (def: do)
 	-m	     move, do not copy files from srcdir to destdir (def: copy)
 	-o	     overwrite, don't add _# after time on duplicates (def: add)
 	-r rollfile  read EXIF rull number of rollfile (def: ~/.exifroll)
+	-s sdirlen   initial top sub-dir chars to use (def: 3, 0 ==> use all)
 	-t	     don't touch modtime to match EXIF/file image (def: do)
 
 	-h	     print this help message
@@ -121,6 +126,7 @@ my %optctl = (
     "o" => \$opt_o,
     "r=s" => \$opt_r,
     "t" => \$opt_t,
+    "s=i" => \$opt_s,
     "v=i" => \$opt_v,
 );
 
@@ -152,7 +158,7 @@ MAIN: {
     #
     $opt_v = 0;
     $ENV{HOME} = "/" unless defined $ENV{HOME};
-    $opt_r = "$ENV{HOME}/.exifroll";
+    $rollfile = "$ENV{HOME}/.exifroll";
 
     # parse args
     #
@@ -178,11 +184,37 @@ MAIN: {
 	print STDERR "$0: too many args\nusage:\n\t$help\n";
 	exit(4);
     }
+    $subdirchars = $opt_s if defined $opt_s;
+    $rollfile = $opt_r if defined $opt_r;
     $srcdir = $ARGV[0];
     $destdir = $ARGV[1];
-    print "DEBUG: srcdir: $srcdir\n" if $opt_v > 0;
-    print "DEBUG: destdir: $destdir\n" if $opt_v > 0;
-    print "DEBUG: ~/exifroll: $opt_r\n" if $opt_v > 0;
+    if ($opt_v > 0) {
+	print "DEBUG:";
+	print " -c" if defined $opt_c;
+	print " -e" if defined $opt_e;
+	print " -m" if defined $opt_m;
+	print " -o" if defined $opt_o;
+	print " -r $opt_r" if defined $opt_r;
+	print " -s $opt_s" if defined $opt_s;
+	print " -t" if defined $opt_t;
+	print " -v $opt_v" if $opt_v > 0;
+	print " $srcdir $destdir\n";
+    }
+    if ($opt_v > 1) {
+	print "DEBUG: won't verify/compare files afterwards\n" if $opt_c;
+	print "DEBUG: won't abort/exit after a fatal error\n" if $opt_e;
+	print "DEBUG: ", ($opt_m ? "move" : "copy"), " files\n";
+	print "DEBUG: ",
+		($opt_o ? "override" : "add _# on"),
+		" duplicate files\n";
+	print "DEBUG: ~/exifroll file: $rollfile\n";
+	print "DEBUG: use ",
+		($subdirchars > 0 ? $subdirchars : "all"),
+		" chars from highest subdir to form path\n";
+	print "DEBUG: ", ($opt_t ? "don't" : "do"), " touch file modtimes\n";
+	print "DEBUG: srcdir: $srcdir\n";
+	print "DEBUG: destdir: $destdir\n";
+    }
 
     # setup to walk the srcdir
     #
@@ -191,26 +223,25 @@ MAIN: {
     $find_opt{follow} = 0;	# do not follow symlinks
     $find_opt{no_chdir} = 0;	# OK to chdir as we walk the tree
     $find_opt{untaint} = 1;	# untaint dirs we chdir to
-    # NOTE: We will only cd into dirs whose name is only [-+@\w./] chars
     $find_opt{untaint_pattern} = $untaint; # untaint pattern
     $find_opt{untaint_skip} = 1; # we will skip any dir that is tainted
 
-    # untaint $srcdir, $destdir, and $opt_r
+    # untaint $srcdir, $destdir, and $rollfile
     #
-    if ($srcdir =~ /$find_opt{untaint_pattern}/) {
+    if ($srcdir =~ /$untaint/o) {
     	$srcdir = $1;
     } else {
 	print STDERR "$0: bogus chars in srcdir\n";
 	exit(5);
     }
-    if ($destdir =~ /$find_opt{untaint_pattern}/) {
+    if ($destdir =~ /$untaint/o) {
     	$destdir = $1;
     } else {
 	print STDERR "$0: bogus chars in destdir\n";
 	exit(6);
     }
-    if ($opt_r =~ /$find_opt{untaint_pattern}/) {
-    	$opt_r = $1;
+    if ($rollfile =~ /$untaint/o) {
+    	$rollfile = $1;
     } else {
 	print STDERR "$0: bogus chars in -r filename\n";
 	exit(7);
@@ -347,8 +378,7 @@ sub dir_setup()
 #
 #	043			# roll number, 3 digits, 0 padded
 #	-			# (dash) separator
-#	101			# lowercase top subdir w/o -'s, or empty
-#				# and eos\w+ suffix removed
+#	101			# top subdir initial chars w/o -'s & lowercase
 #	-			# (dash) separator
 #	2005			# image 4 digit Year
 #	05			# image month, 2 digits [01-12]
@@ -422,8 +452,8 @@ sub wanted()
 
     # canonicalize the path by removing leading ./ and multiple //'s
     #
-    print "DEBUG: in wanted, filename: $filename\n" if $opt_v > 3;
-    print "DEBUG: in wanted, given $File::Find::name\n" if $opt_v > 2;
+    print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
+    print "DEBUG: in wanted with: $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./)+||;
     $pathname =~ s|//+|/|g;
     print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
@@ -507,11 +537,10 @@ sub wanted()
 	return;
     }
     $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
-    $roll_sub =~ s/eos\w+$//;	# remove common EOS trailing chars
-    $roll_sub =~ s/-raw$//;	# remove common -raw ending
     $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+    $roll_sub = substr($roll_sub, 0, $subdirchars) if $subdirchars > 0;
     $roll_sub = "$rollnum-$roll_sub";
-    print "DEBUG: top level subdir: $roll_sub\n" if $opt_v > 2;
+    print "DEBUG: roll_sub name: $roll_sub\n" if $opt_v > 2;
 
     # untaint roll_sub
     #
@@ -796,7 +825,7 @@ sub timestamp($)
 	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
 	return (0, $timestamp);
     }
-    print "DEBUG: EXIF timestamp $filename: error: $errcode: ",
+    print "DEBUG: EXIF timestamp $filename: return code: $errcode: ",
     	  "$timestamp\n" if $opt_v > 4;
 
     # We did not find a valif EXIF in gthe filename, so we will
@@ -831,7 +860,7 @@ sub timestamp($)
 	        defined $filename_ino && defined $exif_ino &&
 	    	$filename_ino == $exif_ino) {
 		print "DEBUG: ignoring EXIF file: $exif_file, same as ",
-		      "filename: $filename\n" if $opt_v > 4;
+		      "filename: $filename\n" if $opt_v > 5;
 		next;
 	    }
 
@@ -939,7 +968,7 @@ sub exif_date($)
 	# ignore if no EXIF value or non-numeric
 	#
 	if (! defined $$info{$tag}) {
-	    print "DEBUG: ignoring undef tag value: $tag\n" if $opt_v > 5;
+	    print "DEBUG: ignoring undef EXIF tag value: $tag\n" if $opt_v > 5;
 	} elsif ($$info{$tag} !~ /^\d+$/) {
 	    print "DEBUG: ignoring non-numeric tag: $tag: ",
 	    	"$$info{$tag}\n" if $opt_v > 5;
@@ -1032,7 +1061,7 @@ sub file_date($)
 # We look in the first $datelines of a text file for a string of
 # the form:
 #
-#	# date: Xyz Mon dd HH:MM:SS ABC YYYY
+#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
 #	xx    xxxxxx		xxxxxxxx    xxx... <== x's mark optional fields
 #
 # The match is case insensitve.  The leading #(whitespace) is optional.
@@ -1082,17 +1111,16 @@ sub text_date($)
 
 	# look for a date string
 	#
-	#	# date: Xyz Mon dd HH:MM:SS ABC YYYY
-	#	xx    x xxxx		xxxxxxxx    xxx... <== optional fields
+	#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
+	#	xx    xxxxxx		xxxxxxxx    xxx... <== optional fields
 	#
 	if ($line =~  m{
 		      ^
 		      (\#\s*)?	# 1: optional # space
 		      date(:)?	# 2: date with optional :
+		      (\s*\S+)	# 3: day of week (ignored)
 		      \s*
-		      (\S+)?	# 3: optional day of week
-		      \s*
-		      (\S+)?	# 4: short name of month
+		      (\S+)	# 4: short name of month
 		      \s+
 		      (\d+)	# 5: day of month
 		      \s+
@@ -1100,19 +1128,20 @@ sub text_date($)
 		      :
 		      (\d+)	# 7: minute of hour
 		      (:\d+)?	# 8: optional :seconds
-		      \s+
-		      (\S+)?	# 9: optional timezone
+		      (\s+\S+)?	# 9: optional timezone
 		      \s+
 		      (\d{4})	# 10: year
 		      }ix) {
 
 	    my $sec = $8;	# seconds field of 0 if not given
 	    my $min = $7;	# minite of hour
-	    my $hour = $6;	# hour of day
+	    my $hour = $5;	# hour of day
 	    my $mday = $5;	# day of month
 	    my $monname = $4;	# short name of month
 	    my $mon = -1;	# month of year [0..11]
 	    my $year = $10;	# year
+	    print "DEBUG: parsed $year-$monname-$mday $hour:$min",
+	    	  (defined $sec ? $sec : ""), "\n" if $opt_v > 6;
 	    my $timestamp;	# date string coverted into a timestamp
 
 	    # convert short name of month to month number [0..11]
@@ -1128,7 +1157,7 @@ sub text_date($)
 	    	next;	# bad month name
 	    }
 
-	    # fix seconds
+	    # fix seconds, the above regexp prepends a : or undefs it
 	    #
 	    if (defined $sec) {
 		$sec =~ s/\D//g;
@@ -1201,7 +1230,7 @@ sub form_dir($)
 #
 # uses these globals:
 #
-#	$opt_r		see -r in program usage at top
+#	$rollfile	see -r in program usage at top
 #	$rollnum	EXIF roll number
 #
 sub roll_setup()
@@ -1209,22 +1238,23 @@ sub roll_setup()
     # process an existing ~/.exifroll file
     #
     $rollnum = "000";	# default initial roll number
-    if (-e $opt_r) {
+    if (-e $rollfile) {
 
 	# firewall - must be readable
 	#
-	if (! -r $opt_r) {
-	    print STDERR "$0: cannot read exifroll file: $opt_r\n";
+	if (! -r $rollfile) {
+	    print STDERR "$0: cannot read exifroll file: $rollfile\n";
 	    exit(31);
-	} elsif (! -w $opt_r) {
-	    print STDERR "$0: cannot write exifroll file: $opt_r\n";
+	} elsif (! -w $rollfile) {
+	    print STDERR "$0: cannot write exifroll file: $rollfile\n";
 	    exit(32);
 	}
 
 	# open ~/.exifroll file
 	#
-	if (! open EXIFROLL, '<', $opt_r) {
-	    print STDERR "$0: cannot open for reading exifroll: $opt_r: $!\n";
+	if (! open EXIFROLL, '<', $rollfile) {
+	    print STDERR "$0: cannot open for reading exifroll: ",
+	    		 "$rollfile: $!\n";
 	    exit(33);
 	}
 
@@ -1237,7 +1267,7 @@ sub roll_setup()
 	# assume roll number of 000 if bad line or no line
 	#
 	if ($rollnum !~ /^\d{3}$/) {
-	    print STDERR "$0: Warning: invalid roll number in $opt_r\n";
+	    print STDERR "$0: Warning: invalid roll number in $rollfile\n";
 	    print STDERR "$0: will use roll number 000 instead\n";
 	    $rollnum = "000";
 	}
@@ -1245,24 +1275,29 @@ sub roll_setup()
 
     # write the next roll numner into ~/.exifroll
     #
-    if (! open EXIFROLL, '>', $opt_r) {
-	print STDERR "$0: cannot open for writing exifroll: $opt_r: $!\n";
+    print "DEBUG: will use roll number: $rollnum\n" if $opt_v > 0;
+    if (! open EXIFROLL, '>', $rollfile) {
+	print STDERR "$0: cannot open for writing exifroll: $rollfile: $!\n";
 	exit(34);
     }
     if ($rollnum > 999) {
 	if (! print EXIFROLL "000\n") {
+	    print "DEBUG: nexr roll number will be 000\n" if $opt_v > 1;
+	} else {
 	    print STDERR "$0: cannot write 000 rollnum ",
-	    		 "to exifroll: $opt_r: $!\n";
+	    		 "to exifroll: $rollfile: $!\n";
 	    exit(35);
 	}
     } else {
-	if (! printf EXIFROLL "%03d\n", $rollnum+1) {
+	if (printf EXIFROLL "%03d\n", $rollnum+1) {
+	    print "DEBUG: next roll number will be ",
+	    	sprintf("%03d", $rollnum+1), "\n" if $opt_v > 1;
+	} else {
 	    print STDERR "$0: cannot write next rollnum ",
-	    		 "to exifroll: $opt_r: $!\n";
+	    		 "to exifroll: $rollfile: $!\n";
 	    exit(36);
 	}
     }
     close EXIFROLL;
-    print "DEBUG: roll number: $rollnum\n" if $opt_v > 0;
     return;
 }
