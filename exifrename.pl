@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.12 $
-# @(#) $Id: exifrename.pl,v 1.12 2005/06/23 15:16:28 chongo Exp chongo $
+# @(#) $Revision: 1.13 $
+# @(#) $Id: exifrename.pl,v 1.13 2005/06/24 00:23:48 chongo Exp chongo $
 # @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -47,7 +47,7 @@ use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.12 $, 10;
+my $VERSION = substr q$Revision: 1.13 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -449,12 +449,23 @@ sub wanted()
     my $nodeino;		# inode number of the current file
     my $roll_sub;		# roll-subdir
     my ($errcode, $errmsg);	# form_dir return values
+    my $lowerfilename;	# lower case filename
+    my $levels;	# directoy levels under $srcdir/DCIM or $srcdir
+    my $datecode;	# exif_date error code or 0 ==> OK
+    my $datestamp;	# EXIF or filename timestamp of OK, or error msg
+    my $yyyymm;	# EXIF or filename timestamp year and month
+    my $dd;		# EXIF or filename timestamp day
+    my $hhmmss;	# EXIF or filename timestamp time
+    my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
+    my $dupnum;	# -# de-duplication number
+    my $destname;	# the destination filename to form
+    my $destpath;	# the full path of the destination file
 
     # canonicalize the path by removing leading ./ and multiple //'s
     #
     print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
     print "DEBUG: in wanted with: $File::Find::name\n" if $opt_v > 2;
-    ($pathname = $File::Find::name) =~ s|^(\./)+||;
+    ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
     print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
 
@@ -520,12 +531,12 @@ sub wanted()
     	return;
     }
 
-    # Determine the top level directory under $srcdir/DCIM or $srcdir,
-    # in lowercase without -'s
+    # Determine the leading chars of the top level directory under $srcdir,
+    # in lowercase, with -'s (dashes) replaced with _'s (underscores)
     #
     if ($pathname =~ m|^$srcdir/[^/]+/|o) {
 	$roll_sub = basename(dirname($pathname));
-	print "DEBUG: orig roll_sub DCIM is: $roll_sub\n" if $opt_v > 4;
+	print "DEBUG: orig roll_sub is: $roll_sub\n" if $opt_v > 4;
     } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
 	$roll_sub = "";
 	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
@@ -537,6 +548,7 @@ sub wanted()
 	return;
     }
     $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
+    $roll_sub = "" if ($roll_sub eq "dcim");
     $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
     $roll_sub = substr($roll_sub, 0, $subdirchars) if $subdirchars > 0;
     $roll_sub = "$rollnum-$roll_sub";
@@ -554,210 +566,194 @@ sub wanted()
 	return;
     }
 
-    # file processing
+    # determine the date of the image by EXIF or filename date
     #
-    if (-f $filename) {
-	my $lowerfilename;	# lower case filename
-	my $levels;	# directoy levels under $srcdir/DCIM or $srcdir
-	my $datecode;	# exif_date error code or 0 ==> OK
-	my $datestamp;	# EXIF or filename timestamp of OK, or error msg
-	my $yyyymm;	# EXIF or filename timestamp year and month
-	my $dd;		# EXIF or filename timestamp day
-	my $hhmmss;	# EXIF or filename timestamp time
-	my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
-	my $dupnum;	# -# de-duplication number
-	my $destname;	# the destination filename to form
-	my $destpath;	# the full path of the destination file
+    ($datecode, $datestamp) = timestamp($pathname);
+    if ($datecode != 0) {
+	print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
+		     "$datestamp\n";
+	print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(15) unless defined $opt_e;
+	return;
+    }
+    print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
 
-	# determine the date of the image by EXIF or filename date
-	#
-	($datecode, $datestamp) = timestamp($pathname);
-	if ($datecode != 0) {
-	    print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
-	    		 "$datestamp\n";
-	    print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(15) unless defined $opt_e;
-	    return;
-	}
-	print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
+    # untaint datestamp
+    #
+    if ($datestamp =~ /$untaint/o) {
+	$datestamp = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in datestamp \n";
+	print "DEBUG: tainted datestamp prune #16 $pathname\n"
+	    if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(16) unless defined $opt_e;
+	return;
+    }
 
-	# untaint datestamp
-	#
-	if ($datestamp =~ /$untaint/o) {
-	    $datestamp = $1;
-	} else {
-	    print STDERR "$0: Fatal: strange chars in datestamp \n";
-	    print "DEBUG: tainted datestamp prune #16 $pathname\n"
-	    	if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(16) unless defined $opt_e;
-	    return;
-	}
+    # canonicalize the filename
+    #
+    ($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
 
-	# canonicalize the filename
-	#
-	($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
+    # If the lowercase name is already of the form:
+    #
+    #	043-101-20050512-152545-ls1f5628.cr2
+    #	043-101-20050512-152545_1-ls1f5628.cr2
+    #
+    # convert it to just ls1f5628.cr2 so that we won't keep adding
+    # date strings to the filename.
+    #
+    if ($lowerfilename =~ /^\d{3}-[^-]+-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+	$lowerfilename = $2;
+    }
+    $lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
 
-	# If the lowercase name is already of the form:
-	#
-	#	043-101-20050512-152545-ls1f5628.cr2
-	#	043-101-20050512-152545_1-ls1f5628.cr2
-	#
-	# convert it to just ls1f5628.cr2 so that we won't keep adding
-	# date strings to the filename.
-	#
-	if ($lowerfilename =~ /^\d{3}-[^-]+-\d{8}-\d{6}(_\d+)?-(.*)$/) {
-	    $lowerfilename = $2;
-	}
-	$lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+    # convert the timestamp into date strings
+    #
+    $yyyymm = strftime("%Y%m", gmtime($datestamp));
+    $dd = strftime("%d", gmtime($datestamp));
 
-	# convert the timestamp into date strings
-	#
-	$yyyymm = strftime("%Y%m", gmtime($datestamp));
-	$dd = strftime("%d", gmtime($datestamp));
+    # untaint yyyymm
+    #
+    if ($yyyymm =~ /$untaint/o) {
+	$yyyymm = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in yyyymm \n";
+	print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(17) unless defined $opt_e;
+	return;
+    }
 
-	# untaint yyyymm
-	#
-	if ($yyyymm =~ /$untaint/o) {
-	    $yyyymm = $1;
-	} else {
-	    print STDERR "$0: Fatal: strange chars in yyyymm \n";
-	    print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(17) unless defined $opt_e;
-	    return;
-	}
+    # ensure the $destdir/yyyymm/rol-sub direct path exists
+    #
+    ($errcode, $errmsg) = form_dir("$destdir/$yyyymm");
+    if ($errcode != 0) {
+	print STDERR "$0: Fatal: mkdir error: $errmsg for ",
+		     "$destdir/$yyyymm\n";
+	print "DEBUG: mkdir err prune #18 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(18) unless defined $opt_e;
+	return;
+    }
+    ($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
+    if ($errcode != 0) {
+	print STDERR "$0: Fatal: mkdir error: $errmsg for ",
+		     "$destdir/$yyyymm/$roll_sub\n";
+	print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(19) unless defined $opt_e;
+	return;
+    }
 
-	# ensure the $destdir/yyyymm/rol-sub direct path exists
+    # deal with the case of when the destination file already exists
+    #
+    # If the filename exists, start adding _X for X 0 to 99
+    # after the seconds.
+    #
+    $hhmmss = strftime("%H%M%S", gmtime($datestamp));
+    $hhmmss_d = $hhmmss;	# assume no de-dup is needed
+    $dupnum = 0;
+    do {
+	# determine destination filename and full path
 	#
-	($errcode, $errmsg) = form_dir("$destdir/$yyyymm");
-	if ($errcode != 0) {
-	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
-	    		 "$destdir/$yyyymm\n";
-	    print "DEBUG: mkdir err prune #18 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(18) unless defined $opt_e;
-	    return;
-	}
-	($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
-	if ($errcode != 0) {
-	    print STDERR "$0: Fatal: mkdir error: $errmsg for ",
-	    		 "$destdir/$yyyymm/$roll_sub\n";
-	    print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(19) unless defined $opt_e;
-	    return;
-	}
+	$destname = "$roll_sub-$yyyymm$dd-$hhmmss_d-$lowerfilename";
+	$destpath = "$destdir/$yyyymm/$roll_sub/$destname";
 
-	# deal with the case of when the destination file already exists
+	# prep for next cycle if destination already exists
 	#
-	# If the filename exists, start adding _X for X 0 to 99
-	# after the seconds.
-	#
-	$hhmmss = strftime("%H%M%S", gmtime($datestamp));
-	$hhmmss_d = $hhmmss;	# assume no de-dup is needed
-	$dupnum = 0;
-	do {
-	    # determine destination filename and full path
+	if (-e $destpath) {
+	    print "DEBUG: dest file exists: $destpath\n" if $opt_v > 4;
+	    $hhmmss_d = $hhmmss . "_" . ++$dupnum;
+
+	    # if -o, then try to remove the old desitnation
 	    #
-	    $destname = "$roll_sub-$yyyymm$dd-$hhmmss_d-$lowerfilename";
-	    $destpath = "$destdir/$yyyymm/$roll_sub/$destname";
-
-	    # prep for next cycle if destination already exists
-	    #
-	    if (-e $destpath) {
-		print "DEBUG: dest file exists: $destpath\n" if $opt_v > 4;
-		$hhmmss_d = $hhmmss . "_" . ++$dupnum;
-
-		# if -o, then try to remove the old desitnation
-		#
-		if (defined $opt_o) {
-		    if (-f $destpath) {
-			print "DEBUG: -o pre-remove: $destpath\n" if $opt_v > 4;
-			unlink $destpath;
-			if ($opt_v > 4 && -f $destpath) {
-			    print "DEBUG: cannot pre-remove: $destpath: $!\n";
-			}
-		    } else {
-			print "DEBUG: will not -o pre-remove ",
-			      "a non-file: $destpath\n" if $opt_v > 4;
+	    if (defined $opt_o) {
+		if (-f $destpath) {
+		    print "DEBUG: -o pre-remove: $destpath\n" if $opt_v > 4;
+		    unlink $destpath;
+		    if ($opt_v > 4 && -f $destpath) {
+			print "DEBUG: cannot pre-remove: $destpath: $!\n";
 		    }
-		    if ($opt_v > 4 && -e $destpath) {
-			print "DEBUG: we must try another filename\n";
-		    }
+		} else {
+		    print "DEBUG: will not -o pre-remove ",
+			  "a non-file: $destpath\n" if $opt_v > 4;
+		}
+		if ($opt_v > 4 && -e $destpath) {
+		    print "DEBUG: we must try another filename\n";
 		}
 	    }
+	}
 
-	    # firewall - do not allow more than 99 duplicates
-	    #
-	    if ($dupnum > 99) {
-		print STDERR "$0: Fatal: more than 99 duplicates for ",
-			     "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
-		print "DEBUG: 100 dups prune #20 $pathname\n" if $opt_v > 0;
-		$File::Find::prune = 1;
-		exit(20) unless defined $opt_e;
-		return;
-	    }
-	} while (-e "$destpath");
-	print "DEBUG: destination: $destname\n" if $opt_v > 1;
-	print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
-
-	# untaint destpath
+	# firewall - do not allow more than 99 duplicates
 	#
-	if ($destpath =~ /$untaint/o) {
-	    $destpath = $1;
-	} else {
-	    print STDERR "$0: Fatal: strange chars in destpath \n";
-	    print "DEBUG: tainted destpath prune #21 $pathname\n" if $opt_v > 0;
+	if ($dupnum > 99) {
+	    print STDERR "$0: Fatal: more than 99 duplicates for ",
+			 "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
+	    print "DEBUG: 100 dups prune #20 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(21) unless defined $opt_e;
+	    exit(20) unless defined $opt_e;
 	    return;
 	}
+    } while (-e "$destpath");
+    print "DEBUG: destination: $destname\n" if $opt_v > 1;
+    print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
 
-	# copy (or move of -m) the image file
-	#
-	if (defined $opt_m) {
-	    if (move($pathname, $destpath) == 0) {
-		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
-			     "mv $filename $destpath failed: $!\n";
-		print "DEBUG: mv err prune #22 $pathname\n" if $opt_v > 0;
-		$File::Find::prune = 1;
-		exit(22) unless defined $opt_e;
-		return;
-	    }
-	    print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
-	} else {
-	    if (copy($pathname, $destpath) == 0) {
-		print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
-			     "cp $filename $destpath failed: $!\n";
-		print "DEBUG: cp err prune #23 $pathname\n" if $opt_v > 0;
-		$File::Find::prune = 1;
-		exit(23) unless defined $opt_e;
-		return;
-	    }
-	    print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
-	}
-
-	# compare unless -t
-	#
-	if (! defined $opt_c && compare($pathname, $destpath) != 0) {
-	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
-			 "compare of $filename and $destpath failed\n";
-	    print "DEBUG: cmp err prune #24 $pathname\n" if $opt_v > 0;
-	    $File::Find::prune = 1;
-	    exit(24) unless defined $opt_e;
-	    return;
-	}
-	print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
-
-	# set the access and modification time unless -t
-	#
-	if (! defined $opt_t) {
-	    utime $datestamp, $datestamp, $destpath;
-	}
-	print "DEBUG: processed: $destpath\n" if $opt_v > 0;
+    # untaint destpath
+    #
+    if ($destpath =~ /$untaint/o) {
+	$destpath = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in destpath \n";
+	print "DEBUG: tainted destpath prune #21 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(21) unless defined $opt_e;
+	return;
     }
+
+    # copy (or move of -m) the image file
+    #
+    if (defined $opt_m) {
+	if (move($pathname, $destpath) == 0) {
+	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
+			 "mv $filename $destpath failed: $!\n";
+	    print "DEBUG: mv err prune #22 $pathname\n" if $opt_v > 0;
+	    $File::Find::prune = 1;
+	    exit(22) unless defined $opt_e;
+	    return;
+	}
+	print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
+    } else {
+	if (copy($pathname, $destpath) == 0) {
+	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
+			 "cp $filename $destpath failed: $!\n";
+	    print "DEBUG: cp err prune #23 $pathname\n" if $opt_v > 0;
+	    $File::Find::prune = 1;
+	    exit(23) unless defined $opt_e;
+	    return;
+	}
+	print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
+    }
+
+    # compare unless -t
+    #
+    if (! defined $opt_c && compare($pathname, $destpath) != 0) {
+	print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
+		     "compare of $filename and $destpath failed\n";
+	print "DEBUG: cmp err prune #24 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(24) unless defined $opt_e;
+	return;
+    }
+    print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
+
+    # set the access and modification time unless -t
+    #
+    if (! defined $opt_t) {
+	utime $datestamp, $datestamp, $destpath;
+    }
+    print "DEBUG: processed: $destpath\n" if $opt_v > 0;
     return;
 }
 
@@ -886,7 +882,7 @@ sub timestamp($)
     # If the file is a txt file or a file without an extension,
     # then look for a Date: string in the early lines of the file.
     #
-    if ($filename =~ /\.txt$/i || basename($filename) !~ /./) {
+    if ($filename =~ /\.txt$/i || basename($filename) !~ /\./) {
 	print "DEBUG: looking for text date in $filename\n" if $opt_v > 4;
 	($errcode, $timestamp) = text_date($filename);
 	if ($errcode == 0) {
@@ -1116,8 +1112,8 @@ sub text_date($)
 	#
 	if ($line =~  m{
 		      ^
-		      (\#\s*)?	# 1: optional # space
-		      date(:)?	# 2: date with optional :
+		      (\#\s*)?	# 1: optional # space (ignored)
+		      date(:)?	# 2: date with optional : (ignored)
 		      (\s*\S+)	# 3: day of week (ignored)
 		      \s*
 		      (\S+)	# 4: short name of month
@@ -1127,8 +1123,8 @@ sub text_date($)
 		      (\d+)	# 6: hour of day
 		      :
 		      (\d+)	# 7: minute of hour
-		      (:\d+)?	# 8: optional :seconds
-		      (\s+\S+)?	# 9: optional timezone
+		      (:\d+)?	# 8: optional :seconds (defaults to "00")
+		      (\s+\S+)?	# 9: optional timezone (ignored)
 		      \s+
 		      (\d{4})	# 10: year
 		      }ix) {
