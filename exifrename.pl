@@ -2,9 +2,9 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.14 $
-# @(#) $Id: exifrename.pl,v 1.14 2005/07/06 03:54:41 chongo Exp chongo $
-# @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
+# @(#) $Revision: 1.15 $
+# @(#) $Id: exifrename.pl,v 1.15 2005/07/13 04:58:21 chongo Exp chongo $
+# @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -47,7 +47,7 @@ use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.14 $, 10;
+my $VERSION = substr q$Revision: 1.15 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -1071,7 +1071,20 @@ sub file_date($)
 # the form:
 #
 #	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-#	xx    xxxxxx		xxxxxxxx    xxx... <== x's mark optional fields
+#	xx    xxxxx 		xxxxxxxx    xxx... <== x's mark optional fields
+#
+# NOTE: SS (seconds of minute) default to 0 if it is not given.
+#
+# or of these forms:
+#
+#	# date: YYYY/MM/dd hh:mm:ss
+#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
+#	# date: YYYY-MM-dd hh:mm:ss
+#	xx    x            xxxxxxxxxxxx            <== x's mark optional fields
+#	# date: YYYY.MM.dd hh:mm:ss
+#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
+#
+# NOTE: hh:mm:ss default to 12:00:00 if it is not given
 #
 # The match is case insensitve.  The leading #(whitespace) is optional.
 # The Xyz (day of week) is optional.  The ABC timezone field is optional.
@@ -1118,17 +1131,19 @@ sub text_date($)
 	chomp $line;
 	print "DEBUG: read text line $i in $filename: $line\n" if $opt_v > 6;
 
-	# look for a date string
+	# look for a date string of the form:
 	#
 	#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-	#	xx    xxxxxx		xxxxxxxx    xxx... <== optional fields
+	#	xx    xxxxx 		xxxxxxxx    xxx... <== optional fields
+	#
+	# NOTE: SS (seconds of minute) default to 0 if it is not given.
 	#
 	if ($line =~  m{
 		      ^
 		      (\#\s*)?	# 1: optional # space (ignored)
 		      date(:)?	# 2: date with optional : (ignored)
-		      (\s*\S+)	# 3: day of week (ignored)
-		      \s*
+		      (\s*\S+)?	# 3: day of week (ignored)
+		      \s+
 		      (\S+)	# 4: short name of month
 		      \s+
 		      (\d+)	# 5: day of month
@@ -1139,19 +1154,19 @@ sub text_date($)
 		      (:\d+)?	# 8: optional :seconds (defaults to "00")
 		      (\s+\S+)?	# 9: optional timezone (ignored)
 		      \s+
-		      (\d{4})	# 10: year
+		      (\d{4})	# 10: 4 digit year
 		      }ix) {
 
-	    my $sec = $8;	# seconds field of 0 if not given
+	    my $sec = $8;	# seconds or 0 if not given
 	    my $min = $7;	# minite of hour
-	    my $hour = $5;	# hour of day
+	    my $hour = $6;	# hour of day
 	    my $mday = $5;	# day of month
 	    my $monname = $4;	# short name of month
 	    my $mon = -1;	# month of year [0..11]
 	    my $year = $10;	# year
-	    print "DEBUG: parsed $year-$monname-$mday $hour:$min",
-	    	  (defined $sec ? $sec : ""), "\n" if $opt_v > 6;
 	    my $timestamp;	# date string coverted into a timestamp
+	    print "DEBUG: #1 parsed $year-$monname-$mday $hour:$min",
+	    	  (defined $sec ? $sec : ""), "\n" if $opt_v > 6;
 
 	    # convert short name of month to month number [0..11]
 	    #
@@ -1176,14 +1191,87 @@ sub text_date($)
 
 	    # convert fields to a timestamp
 	    #
+	    printf("DEBUG: #1 using timestamp for %04d-%02d-%02d %02d:%02d:%02d\n",
+	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
 	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
 	    if (! defined $timestamp) {
-		print "DEBUG: ignoring malformed date on line $i ",
+		print "DEBUG: #1 ignoring malformed date on line $i ",
 		    " in $filename\n" if $opt_v > 4;
 	    	next;	# bad month name
 	    }
 	    if ($timestamp < $mintime) {
-		print "DEBUG: ignoring very early date on line $i ",
+		print "DEBUG: #1 ignoring very early date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+
+	    # return the timestamp according to this date line we read
+	    #
+	    return (0, $timestamp);
+
+	# look for a date string of the form:
+	#
+	#	# date: YYYY/MM/dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	#	# date: YYYY-MM-dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	#	# date: YYYY.MM.dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	# NOTE: hh:mm:ss default to 12:00:00 if it is not given
+	#
+	} elsif ($line =~  m{
+		      ^
+		      (\#\s*)?	# 1: optional # space (ignored)
+		      date(:)?	# 2: date with optional : (ignored)
+		      \s+
+		      (\d{4})	# 3: 4 digit year
+		      [/.-]
+		      (\d{2})	# 4: 2 digit month of year [01-12]
+		      [/.-]
+		      (\d{2})	# 5: 2  2 digit day of month [01-31]
+		      (\s+\d{2}:\d{2}:\d{2})?	# 6: optional hh:mm:ss timestamp
+		      }ix) {
+
+	    my $sec;		# seconds of minute
+	    my $min;		# minite of hour
+	    my $hour;		# hour of day
+	    my $timeofday = $6;	# optional hh:mm:ss timestamp
+	    my $mday = $5;	# day of month
+	    my $mon = $4;	# month of year [01-12]
+	    my $year = $3;	# year
+	    my $timestamp;	# date string coverted into a timestamp
+	    print "DEBUG: #2 parsed $year-$mon-$mday",
+	    	  (defined $timeofday ? $timeofday : ""), "\n" if $opt_v > 6;
+
+	    # parse timeofday, if given
+	    #
+	    if (defined $timeofday && 
+	    	$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
+		$hour = $1;
+		$min = $2;
+		$sec = $3;
+	    } else {
+		# no time of day, use noon
+		$hour = 12;
+		$min = 0;
+		$sec = 0;
+	    }
+
+	    # convert fields to a timestamp
+	    #
+	    printf("DEBUG: #2 using timestamp for %04d-%02d-%02d %02d:%02d:%02d\n",
+	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
+	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
+	    if (! defined $timestamp) {
+		print "DEBUG: #2 ignoring malformed date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    if ($timestamp < $mintime) {
+		print "DEBUG: #2 ignoring very early date on line $i ",
 		    " in $filename\n" if $opt_v > 4;
 	    	next;	# bad month name
 	    }
