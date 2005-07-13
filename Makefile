@@ -3,7 +3,7 @@
 # exif - print EXIF information that may be in a file
 #
 # @(#) $Revision: 1.1 $
-# @(#) $Id: Makefile,v 1.1 2001/10/26 14:52:45 chongo Exp $
+# @(#) $Id: Makefile,v 1.1 2005/05/04 07:33:05 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/Makefile,v $
 #
 # Copyright (c) 2001 by Landon Curt Noll.  All Rights Reserved.
@@ -36,11 +36,16 @@ BINMODE=0555
 
 DESTBIN=/usr/local/bin
 
-TARGETS= exif
+TARGETS= exif exifrename
 
 all: ${TARGETS}
 
 exif: exif.pl
+	-rm -f $@
+	cp $@.pl $@
+	chmod +x $@
+
+exifrename: exifrename.pl
 	-rm -f $@
 	cp $@.pl $@
 	chmod +x $@
