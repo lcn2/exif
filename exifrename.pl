@@ -2,9 +2,9 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.15 $
-# @(#) $Id: exifrename.pl,v 1.15 2005/07/13 04:58:21 chongo Exp chongo $
-# @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
+# @(#) $Revision: 1.16 $
+# @(#) $Id: exifrename.pl,v 1.16 2005/07/13 06:00:29 chongo Exp chongo $
+# @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -47,7 +47,7 @@ use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.15 $, 10;
+my $VERSION = substr q$Revision: 1.16 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -117,7 +117,8 @@ my $help = qq{\n$usage
     NOTE:
 	exit 0	all is OK
 	exit >0 some fatal error
-};
+
+    Version: $VERSION};
 my %optctl = (
     "c" => \$opt_c,
     "e" => \$opt_e,
