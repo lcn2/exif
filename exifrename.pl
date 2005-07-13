@@ -2,9 +2,9 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.13 $
-# @(#) $Id: exifrename.pl,v 1.13 2005/06/24 00:23:48 chongo Exp chongo $
-# @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
+# @(#) $Revision: 1.14 $
+# @(#) $Id: exifrename.pl,v 1.14 2005/07/06 03:54:41 chongo Exp chongo $
+# @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -47,7 +47,7 @@ use Time::Local qw(timegm_nocheck timegm);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.13 $, 10;
+my $VERSION = substr q$Revision: 1.14 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -415,13 +415,17 @@ sub dir_setup()
 #	/constate.tof
 #
 # In addition, other files such as .DS_Store may be created by OS X.
-# These .DS_Store files should be ignored by the tool.
+# These .DS_Store files should be ignored by the tool.  The Titanium
+# Toast CD/DVD burner creates "desktop db" and "desktop df" which
+# are also ignored by this shell.
 #
 # So we need to ignore the following:
 #
 #	/.Trashes		# entire directory tree directly under srcdir
 #	/.comstate.tof		# this file directly under srcdir
 #	.DS_Store		# this fiile anywhere
+#	desktop db		# Titanium Toast CD/DVD burner file
+#	desktop df		# Titanium Toast CD/DVD burner file
 #
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and symlinks in destdir.
@@ -501,6 +505,15 @@ sub wanted()
     if ($filename eq ".DS_Store") {
 	# skip OS X .DS_Store files
 	print "DEBUG: .DS_Store prune #3 $pathname\n" if $opt_v > 3;
+	$File::Find::prune = 1;
+	return;
+    }
+
+    # prune out Titanium Toast files
+    #
+    if ($filename =~ /^desktop d[bf]$/i) {
+	# skip Titanium Toast files
+	print "DEBUG: desktop prune #4 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
