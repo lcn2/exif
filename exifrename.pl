@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.16 $
-# @(#) $Id: exifrename.pl,v 1.16 2005/07/13 06:00:29 chongo Exp chongo $
+# @(#) $Revision: 1.17 $
+# @(#) $Id: exifrename.pl,v 1.17 2005/07/13 06:20:17 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -34,7 +34,8 @@
 #
 use strict;
 use bytes;
-use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_e $opt_r $opt_s);
+use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
+            $opt_s $opt_r);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -44,10 +45,11 @@ use File::Copy;
 use File::Compare;
 use File::Basename;
 use Time::Local qw(timegm_nocheck timegm);
+use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.16 $, 10;
+my $VERSION = substr q$Revision: 1.17 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -67,6 +69,7 @@ my %mname = (
 );
 my $subdirchars = 3;	# number of initial chars of subdir to use in path
 my $rollfile;		# file that keeps track of next roll number
+my $adding_readme = 0;	# 1 ==> calling wanted from add_readme(), not find()
 
 
 # EXIF timestamp related tag names to look for
@@ -96,15 +99,16 @@ my $mintime = 500000000;
 
 # usage and help
 #
-my $usage = "$0 [-c][-e][-m][-o][-r rollfile][-s sdirlen][-t] \n" .
+my $usage = "$0 [-a][-c][-e exifroll][-m][-o][-r readme][-s sdirlen][-t] \n" .
 	"\t[-h][-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
+	-a	     don't abort/exit after a fatal error (def: do)
+	-e exifroll  read roll number from exifroll (def: ~/.exifroll)
 	-c	     don't verify/compare files after they are copied (def: do)
-	-e	     don't abort/exit after a fatal error (def: do)
 	-m	     move, do not copy files from srcdir to destdir (def: copy)
 	-o	     overwrite, don't add _# after time on duplicates (def: add)
-	-r rollfile  read EXIF rull number of rollfile (def: ~/.exifroll)
+	-r readme    add readme as if it was srcdir/readme.txt (def: don't)
 	-s sdirlen   initial top sub-dir chars to use (def: 3, 0 ==> use all)
 	-t	     don't touch modtime to match EXIF/file image (def: do)
 
@@ -120,8 +124,9 @@ my $help = qq{\n$usage
 
     Version: $VERSION};
 my %optctl = (
+    "a" => \$opt_a,
+    "e=s" => \$opt_e,
     "c" => \$opt_c,
-    "e" => \$opt_e,
     "h" => \$opt_h,
     "m" => \$opt_m,
     "o" => \$opt_o,
@@ -142,6 +147,8 @@ sub file_date($);
 sub text_date($);
 sub form_dir($);
 sub roll_setup();
+sub readme_check($);
+sub add_readme($);
 
 
 # setup
@@ -186,13 +193,14 @@ MAIN: {
 	exit(4);
     }
     $subdirchars = $opt_s if defined $opt_s;
-    $rollfile = $opt_r if defined $opt_r;
+    $rollfile = $opt_e if defined $opt_e;
     $srcdir = $ARGV[0];
     $destdir = $ARGV[1];
     if ($opt_v > 0) {
 	print "DEBUG:";
+	print " -a" if defined $opt_a;
 	print " -c" if defined $opt_c;
-	print " -e" if defined $opt_e;
+	print " -e $opt_e" if defined $opt_e;
 	print " -m" if defined $opt_m;
 	print " -o" if defined $opt_o;
 	print " -r $opt_r" if defined $opt_r;
@@ -203,7 +211,7 @@ MAIN: {
     }
     if ($opt_v > 1) {
 	print "DEBUG: won't verify/compare files afterwards\n" if $opt_c;
-	print "DEBUG: won't abort/exit after a fatal error\n" if $opt_e;
+	print "DEBUG: won't abort/exit after a fatal error\n" if $opt_a;
 	print "DEBUG: ", ($opt_m ? "move" : "copy"), " files\n";
 	print "DEBUG: ",
 		($opt_o ? "override" : "add _# on"),
@@ -213,8 +221,16 @@ MAIN: {
 		($subdirchars > 0 ? $subdirchars : "all"),
 		" chars from highest subdir to form path\n";
 	print "DEBUG: ", ($opt_t ? "don't" : "do"), " touch file modtimes\n";
+	print "DEBUG: treating $opt_r as if it was $srcdir/readme.txt\n"
+		if $opt_r;
 	print "DEBUG: srcdir: $srcdir\n";
 	print "DEBUG: destdir: $destdir\n";
+    }
+    # sanity check readme if -r readme was given
+    if (defined $opt_r) {
+	$opt_r = readme_check($opt_r);
+	print "DEBUG: will add $opt_r as it was ",
+	      "$srcdir/readme.txt\n" if $opt_v > 1;
     }
 
     # setup to walk the srcdir
@@ -244,7 +260,7 @@ MAIN: {
     if ($rollfile =~ /$untaint/o) {
     	$rollfile = $1;
     } else {
-	print STDERR "$0: bogus chars in -r filename\n";
+	print STDERR "$0: bogus chars in -e filename\n";
 	exit(7);
     }
 
@@ -269,6 +285,12 @@ MAIN: {
     # walk the srcdir, making renamed copies and symlinks
     #
     find(\%find_opt, $srcdir);
+
+    # load the readme file if -r readme was given
+    #
+    if ($opt_r) {
+	add_readme($opt_r);
+    }
 
     # all done
     #
@@ -338,7 +360,7 @@ sub dir_setup()
 # uses these globals:
 #
 #	$opt_c		see -c in program usage at top
-#	$opt_e		see -e in program usage at top
+#	$opt_a		see -e in program usage at top
 #	$opt_f		see -f in program usage at top
 #	$opt_o		see -o in program usage at top
 #	$opt_t		see -t in program usage at top
@@ -439,32 +461,66 @@ sub dir_setup()
 #
 # and these global vaules set:
 #
+#	$srcdir			where images are from
+#	$destdir		where copied and renamed files go
 #	$File::Find::dir	current directory name
 #	$File::Find::name 	complete pathname to the file
 #	$File::Find::prune	set 1 one to prune current node out of path
 #	$File::Find::topdir	top directory path ($srcdir)
 #	$File::Find::topdev	device of the top directory
 #	$File::Find::topino	inode number of the top directory
+#	$adding_readme		0 ==> function being called by find()
+#				!= 0  ==> function being called by add_readme()
 #
-sub wanted()
+sub wanted($)
 {
-    my $filename = $_;		# current filename within $File::Find::dir
+    my $filename = $_;		# current filename within $File::Find::dir or
+				# absolute path of readme if $adding_readme!=0
     my $pathname;		# complete path $File::Find::name
     my $nodedev;		# device of the current file
     my $nodeino;		# inode number of the current file
     my $roll_sub;		# roll-subdir
     my ($errcode, $errmsg);	# form_dir return values
-    my $lowerfilename;	# lower case filename
-    my $levels;	# directoy levels under $srcdir/DCIM or $srcdir
+    my $lowerfilename;		# lower case filename
+    my $levels;		# directoy levels under $srcdir/DCIM or $srcdir
     my $datecode;	# exif_date error code or 0 ==> OK
     my $datestamp;	# EXIF or filename timestamp of OK, or error msg
-    my $yyyymm;	# EXIF or filename timestamp year and month
+    my $yyyymm;		# EXIF or filename timestamp year and month
     my $dd;		# EXIF or filename timestamp day
-    my $hhmmss;	# EXIF or filename timestamp time
+    my $hhmmss;		# EXIF or filename timestamp time
     my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
-    my $dupnum;	# -# de-duplication number
+    my $dupnum;		# _number de-duplication number
     my $destname;	# the destination filename to form
     my $destpath;	# the full path of the destination file
+
+    # If we are being called from add_readme() instead of find(),
+    # then we have to simulate a File::Find call by setting the
+    # $File::Find externals.
+    #
+    if ($adding_readme != 0) {
+	print "DEBUG: wanted() adding special readme file: ",
+	      "$opt_r\n" if $opt_v > 1;
+	print "DEBUG: simulating find() call\n" if $opt_v > 2;
+	$filename = basename($opt_r);
+	$File::Find::dir = dirname($opt_r);
+	$File::Find::name = abs_path($opt_r);
+	if (! defined $filename || ! defined $File::Find::dir ||
+	    ! defined $File::Find::name) {
+	    # skip missing files
+	    print STDERR "$0: Fatal: cannot determine basename and/or ",
+	    		 "dirname and/or absolute path of $_\n";
+	    print "DEBUG: missing file prune #0 $pathname\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(13) unless defined $opt_a;
+	    return;
+	}
+	$File::Find::prune = 0;
+	$File::Find::topdir = $File::Find::dir;
+	# we use a dev/ino that does not match any valid file because we
+	# do not care if the readme is already under the srcdir or destdir
+	$File::Find::topdev = 0;
+	$File::Find::topino = 0;
+    }
 
     # canonicalize the path by removing leading ./ and multiple //'s
     #
@@ -476,9 +532,12 @@ sub wanted()
 
     # prune out anything that is directory or file
     #
-    if (! -d $filename && ! -f $filename) {
+    if (($adding_readme == 0 &&
+         ! -d $filename && ! -f $filename) ||
+	($adding_readme != 0 &&
+	 ! -d $File::Find::name && ! -f $File::Find::name)) {
 	# skip non-dir/non-files
-	print "DEBUG: non-dir/non-file prune #0 $pathname\n" if $opt_v > 3;
+	print "DEBUG: non-dir/non-file prune #1 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -490,13 +549,13 @@ sub wanted()
     #
     if ($pathname eq "$srcdir/.Trashes") {
 	# skip this useless camera node
-	print "DEBUG: .Trashes prune #1 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .Trashes prune #2 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
     if ($pathname eq "$srcdir/.comstate.tof") {
 	# skip this useless camera node
-	print "DEBUG: .comstate.tof prune #2 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .comstate.tof prune #3 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -505,7 +564,7 @@ sub wanted()
     #
     if ($filename eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	print "DEBUG: .DS_Store prune #3 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .DS_Store prune #4 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -514,7 +573,7 @@ sub wanted()
     #
     if ($filename =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	print "DEBUG: desktop prune #4 $pathname\n" if $opt_v > 3;
+	print "DEBUG: desktop prune #5 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -537,28 +596,63 @@ sub wanted()
     	return;
     }
 
+    # ignore missing files
+    #
+    # NOTE: The add_readme() function simulates find() calling this
+    #	    function.  While readme_check() does a sanity check
+    #	    on the readme file, this final check is here as an
+    #	    extra sanity check.
+    #
+    if (($adding_readme == 0 && ! -e $filename) ||
+	($adding_readme != 0 && ! -e $File::Find::name)) {
+	# skip missing files
+	print STDERR "$0: Fatal: skipping missing file: $filename\n";
+	print "DEBUG: missing file prune #9 $pathname\n" if $opt_v > 1;
+	$File::Find::prune = 1;
+	exit(14) unless defined $opt_a;
+	return;
+    }
+
     # ignore non-files
     #
-    if (! -f $filename) {
+    if (($adding_readme == 0 && ! -f $filename) ||
+	($adding_readme != 0 && ! -f $File::Find::name)) {
 	# ignore but do not prune directories
-	print "DEBUG: dir ignore #9 $pathname\n" if $opt_v > 3;
+	print "DEBUG: dir ignore #10 $pathname\n" if $opt_v > 3;
     	return;
     }
 
-    # Determine the leading chars of the top level directory under $srcdir,
-    # in lowercase, with -'s (dashes) replaced with _'s (underscores)
+    # ignore non-readable files
     #
-    if ($pathname =~ m|^$srcdir/[^/]+/|o) {
+    if (($adding_readme == 0 && ! -r $filename) ||
+	($adding_readme != 0 && ! -r $File::Find::name)) {
+	# skip non-readable files
+	print STDERR "$0: Fatal: non-readable file: $filename\n";
+	print "DEBUG: non-readable file prune #11 $pathname\n" if $opt_v > 1;
+	$File::Find::prune = 1;
+	exit(15) unless defined $opt_a;
+	return;
+    }
+
+    # Determine the leading chars of the top level directory under $srcdir,
+    # in lowercase, with -'s (dashes) replaced with _'s (underscores).
+    # However if we are adding a readme file, then we will act as if
+    # the original file was directly under $srcdir.
+    #
+    if ($adding_readme != 0) {
+	$roll_sub = "";
+	print "DEBUG: adding readme, using empty roll_sub\n" if $opt_v > 4;
+    } elsif ($pathname =~ m|^$srcdir/[^/]+/|o) {
 	$roll_sub = basename(dirname($pathname));
 	print "DEBUG: orig roll_sub is: $roll_sub\n" if $opt_v > 4;
     } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
 	$roll_sub = "";
 	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
     } else {
-	print STDERR "$0: Fatal $pathname not under $srcdir\n";
+	print STDERR "$0: Fatal: $pathname not under $srcdir\n";
 	print "DEBUG: non-srcdir prune #13 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(13) unless defined $opt_e;
+	exit(16) unless defined $opt_a;
 	return;
     }
     $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
@@ -576,7 +670,7 @@ sub wanted()
 	print STDERR "$0: Fatal: strange chars in roll_sub \n";
 	print "DEBUG: tainted roll_sub prune #14 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(14) unless defined $opt_e;
+	exit(17) unless defined $opt_a;
 	return;
     }
 
@@ -588,7 +682,7 @@ sub wanted()
 		     "$datestamp\n";
 	print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(15) unless defined $opt_e;
+	exit(18) unless defined $opt_a;
 	return;
     }
     print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
@@ -602,13 +696,18 @@ sub wanted()
 	print "DEBUG: tainted datestamp prune #16 $pathname\n"
 	    if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(16) unless defined $opt_e;
+	exit(19) unless defined $opt_a;
 	return;
     }
 
     # canonicalize the filename
     #
-    ($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
+    if ($adding_readme == 0) {
+	($lowerfilename = $filename) =~ tr /[A-Z]/[a-z]/;	# lower case
+    } else {
+	# we always add the -r readme file as readme.txt
+	$lowerfilename = "readme.txt";
+    }
 
     # If the lowercase name is already of the form:
     #
@@ -636,7 +735,7 @@ sub wanted()
 	print STDERR "$0: Fatal: strange chars in yyyymm \n";
 	print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(17) unless defined $opt_e;
+	exit(20) unless defined $opt_a;
 	return;
     }
 
@@ -648,7 +747,7 @@ sub wanted()
 		     "$destdir/$yyyymm\n";
 	print "DEBUG: mkdir err prune #18 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(18) unless defined $opt_e;
+	exit(21) unless defined $opt_a;
 	return;
     }
     ($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
@@ -657,7 +756,7 @@ sub wanted()
 		     "$destdir/$yyyymm/$roll_sub\n";
 	print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(19) unless defined $opt_e;
+	exit(22) unless defined $opt_a;
 	return;
     }
 
@@ -707,7 +806,7 @@ sub wanted()
 			 "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
 	    print "DEBUG: 100 dups prune #20 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(20) unless defined $opt_e;
+	    exit(23) unless defined $opt_a;
 	    return;
 	}
     } while (-e "$destpath");
@@ -722,7 +821,7 @@ sub wanted()
 	print STDERR "$0: Fatal: strange chars in destpath \n";
 	print "DEBUG: tainted destpath prune #21 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(21) unless defined $opt_e;
+	exit(24) unless defined $opt_a;
 	return;
     }
 
@@ -734,7 +833,7 @@ sub wanted()
 			 "mv $filename $destpath failed: $!\n";
 	    print "DEBUG: mv err prune #22 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(22) unless defined $opt_e;
+	    exit(25) unless defined $opt_a;
 	    return;
 	}
 	print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
@@ -744,7 +843,7 @@ sub wanted()
 			 "cp $filename $destpath failed: $!\n";
 	    print "DEBUG: cp err prune #23 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(23) unless defined $opt_e;
+	    exit(26) unless defined $opt_a;
 	    return;
 	}
 	print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
@@ -757,7 +856,7 @@ sub wanted()
 		     "compare of $filename and $destpath failed\n";
 	print "DEBUG: cmp err prune #24 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(24) unless defined $opt_e;
+	exit(27) unless defined $opt_a;
 	return;
     }
     print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
@@ -949,10 +1048,10 @@ sub exif_date($)
     # firewall - image file must be readable
     #
     if (! -e $filename) {
-	return (25, "cannot open");	# exit(25)
+	return (28, "cannot open");	# exit(28)
     }
     if (! -r $filename) {
-	return (26, "cannot read");	# exit(26)
+	return (29, "cannot read");	# exit(29)
     }
 
     # extract meta information from an image
@@ -961,9 +1060,9 @@ sub exif_date($)
     if (! defined $info || defined $$info{Error}) {
 	# failure to get a EXIF data
 	if (defined $$info{Error}) {
-	    return (27, "EXIF data error: $$info{Error}");	# exit(27)
+	    return (30, "EXIF data error: $$info{Error}");	# exit(30)
         } else {
-	    return (28, "no EXIF data");	# exit(28)
+	    return (31, "no EXIF data");	# exit(31)
 	}
     }
 
@@ -1000,13 +1099,13 @@ sub exif_date($)
         }
     }
     if ($timestamp < 0) {
-	return (29, "no timestamp in EXIF data");	# exit(29)
+	return (32, "no timestamp in EXIF data");	# exit(32)
     }
 
     # Avoid very old EXIF timestamps
     #
     if ($timestamp < $mintime) {
-	return (30, "timestamp: $timestamp < min: $mintime");	# exit(30)
+	return (33, "timestamp: $timestamp < min: $mintime");	# exit(33)
     }
 
     # return the EXIF timestamp
@@ -1034,7 +1133,7 @@ sub file_date($)
     # firewall - file must exist
     #
     if (! -e $filename) {
-	return (31, "cannot open");	# exit(31)
+	return (34, "cannot open");	# exit(34)
     }
 
     # stat the file
@@ -1062,7 +1161,7 @@ sub file_date($)
     # we cannot find a useful file timestamp
     #
     print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
-    return (32, "file is too old");	# exit(32)
+    return (35, "file is too old");	# exit(35)
 }
 
 
@@ -1107,17 +1206,17 @@ sub text_date($)
     # firewall - image file must be readable
     #
     if (! -e $filename) {
-	return (33, "cannot open");	# exit(33)
+	return (36, "cannot open");	# exit(36)
     }
     if (! -r $filename) {
-	return (34, "cannot read");	# exit(34)
+	return (37, "cannot read");	# exit(37)
     }
 
     # open the text file
     #
     print "DEBUG: looking for date in text file: $filename\n" if $opt_v > 4;
     if (! open TEXT, '<', $filename) {
-	return (35, "cannot open: $!");	# exit(35)
+	return (38, "cannot open: $!");	# exit(38)
     }
 
     # read the 1st $datelines of a file looking for a timestamp
@@ -1127,7 +1226,7 @@ sub text_date($)
 	# read a line
 	#
 	if (! defined($line = <TEXT>)) {
-	    return (36, "EOF or text read error");	# exit(36)
+	    return (39, "EOF or text read error");	# exit(39)
 	}
 	chomp $line;
 	print "DEBUG: read text line $i in $filename: $line\n" if $opt_v > 6;
@@ -1192,7 +1291,8 @@ sub text_date($)
 
 	    # convert fields to a timestamp
 	    #
-	    printf("DEBUG: #1 using timestamp for %04d-%02d-%02d %02d:%02d:%02d\n",
+	    printf("DEBUG: #1 will parse date: " .
+		   "%04d-%02d-%02d %02d:%02d:%02d\n",
 	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
 	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
 	    if (! defined $timestamp) {
@@ -1205,6 +1305,7 @@ sub text_date($)
 		    " in $filename\n" if $opt_v > 4;
 	    	next;	# bad month name
 	    }
+	    print "DEBUG: #1 $filename timestamp: $timestamp\n" if $opt_v > 2;
 
 	    # return the timestamp according to this date line we read
 	    #
@@ -1249,7 +1350,7 @@ sub text_date($)
 
 	    # parse timeofday, if given
 	    #
-	    if (defined $timeofday && 
+	    if (defined $timeofday &&
 	    	$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
 		$hour = $1;
 		$min = $2;
@@ -1263,9 +1364,11 @@ sub text_date($)
 
 	    # convert fields to a timestamp
 	    #
-	    printf("DEBUG: #2 using timestamp for %04d-%02d-%02d %02d:%02d:%02d\n",
+	    printf("DEBUG: #2 will parse date: " .
+	    	   "%04d-%02d-%02d %02d:%02d:%02d\n",
 	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
-	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
+	    $timestamp = timegm_nocheck($sec, $min, $hour,
+	    				$mday, $mon-1, $year);
 	    if (! defined $timestamp) {
 		print "DEBUG: #2 ignoring malformed date on line $i ",
 		    " in $filename\n" if $opt_v > 4;
@@ -1276,6 +1379,7 @@ sub text_date($)
 		    " in $filename\n" if $opt_v > 4;
 	    	next;	# bad month name
 	    }
+	    print "DEBUG: #2 $filename timestamp: $timestamp\n" if $opt_v > 2;
 
 	    # return the timestamp according to this date line we read
 	    #
@@ -1307,16 +1411,16 @@ sub form_dir($)
     #
     if (-e $dir_name && ! -d $dir_name) {
 	print STDERR "$0: is a non-directory: $dir_name\n";
-	return (35, "is a non-directory");	# exit(35)
+	return (40, "is a non-directory");	# exit(40)
     }
     if (! -d $dir_name) {
 	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
         if (! mkdir($dir_name, 0775)) {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
-	    return (36, "cannot mkdir");	# exit(36)
+	    return (41, "cannot mkdir");	# exit(41)
 	} elsif (! -w $dir_name) {
 	    print STDERR "$0: directory is not writable: $dir_name\n";
-	    return (37, "directory is not writable");	# exit(37)
+	    return (42, "directory is not writable");	# exit(42)
 	}
     }
     # all is OK
@@ -1328,7 +1432,7 @@ sub form_dir($)
 #
 # uses these globals:
 #
-#	$rollfile	see -r in program usage at top
+#	$rollfile	see -e in program usage at top
 #	$rollnum	EXIF roll number
 #
 sub roll_setup()
@@ -1342,10 +1446,10 @@ sub roll_setup()
 	#
 	if (! -r $rollfile) {
 	    print STDERR "$0: cannot read exifroll file: $rollfile\n";
-	    exit(31);
+	    exit(43);
 	} elsif (! -w $rollfile) {
 	    print STDERR "$0: cannot write exifroll file: $rollfile\n";
-	    exit(32);
+	    exit(44);
 	}
 
 	# open ~/.exifroll file
@@ -1353,7 +1457,7 @@ sub roll_setup()
 	if (! open EXIFROLL, '<', $rollfile) {
 	    print STDERR "$0: cannot open for reading exifroll: ",
 	    		 "$rollfile: $!\n";
-	    exit(33);
+	    exit(45);
 	}
 
 	# read only the first line
@@ -1376,7 +1480,7 @@ sub roll_setup()
     print "DEBUG: will use roll number: $rollnum\n" if $opt_v > 0;
     if (! open EXIFROLL, '>', $rollfile) {
 	print STDERR "$0: cannot open for writing exifroll: $rollfile: $!\n";
-	exit(34);
+	exit(46);
     }
     if ($rollnum > 999) {
 	if (! print EXIFROLL "000\n") {
@@ -1384,7 +1488,7 @@ sub roll_setup()
 	} else {
 	    print STDERR "$0: cannot write 000 rollnum ",
 	    		 "to exifroll: $rollfile: $!\n";
-	    exit(35);
+	    exit(47);
 	}
     } else {
 	if (printf EXIFROLL "%03d\n", $rollnum+1) {
@@ -1393,9 +1497,94 @@ sub roll_setup()
 	} else {
 	    print STDERR "$0: cannot write next rollnum ",
 	    		 "to exifroll: $rollfile: $!\n";
-	    exit(36);
+	    exit(48);
 	}
     }
     close EXIFROLL;
     return;
+}
+
+
+# readme_check - check the -r readme filename given
+#
+# given:
+#	$readme		# -r readme file to check
+#
+# returns:
+#	absolute path of the readme file
+#
+# NOTE: This function exits if there are any problems.
+#
+# NOTE: This function is expected to be called from main
+#	soon after arg parsing.
+#
+sub readme_check($)
+{
+    my ($readme) = @_;		# get args
+    my $exitcode;		# return code from text_date
+    my $message;		# timestamp or error message
+    my $ret;			# absolute path of readme file
+
+    # -r $readme file must be a readable file
+    #
+    if (! -e $readme) {
+	print STDERR "$0: -r $readme does not exist\n";
+	exit(49);
+    }
+    if (! -f $readme) {
+	print STDERR "$0: -r $readme is not a file\n";
+	exit(50);
+    }
+    if (! -r $readme) {
+	print STDERR "$0: -r $readme is not readable\n";
+	exit(51);
+    }
+
+    # must have a text date
+    #
+    ($exitcode, $message) = text_date($readme);
+    if ($exitcode != 0) {
+	print STDERR "$0: -r $readme does not have a date timestamp line\n";
+	print STDERR "$0: try adding '# date: yyyy-mm-dd' line to $readme\n";
+	exit(52);
+    }
+
+    # determine absolute path of readme
+    #
+    $ret = abs_path($readme);
+    if (! defined $ret) {
+	print STDERR "$0: cannot determine absolute path of $readme\n";
+	exit(53);
+    }
+
+    # prepend current directory if path is not absolute
+    #
+    return $ret;
+}
+
+
+# add_readme - add the -r readme as if it was srcdir/readme.txt
+#
+# given:
+#	$readme		# -r readme file to check
+#
+# NOTE: It is assumed that readme_check() was previouslty called to
+#	pre-verify the $readme file.  Yes, something could alter the file
+#	between the read_check() call and this function call.
+#
+sub add_readme($)
+{
+    my ($readme) = @_;		# get args
+
+    # we set adding_readme to let wanted know find() is not calling it
+    #
+    $adding_readme = 1;
+
+    # call wanted with readme
+    #
+    wanted($readme);
+
+    # return to normal wanted calls
+    #
+    $adding_readme = 0;
 }
