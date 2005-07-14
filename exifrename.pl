@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.17 $
-# @(#) $Id: exifrename.pl,v 1.17 2005/07/13 06:20:17 chongo Exp chongo $
+# @(#) $Revision: 1.18 $
+# @(#) $Id: exifrename.pl,v 1.18 2005/07/14 15:44:42 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.17 $, 10;
+my $VERSION = substr q$Revision: 1.18 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -445,7 +445,7 @@ sub dir_setup()
 # So we need to ignore the following:
 #
 #	/.Trashes		# entire directory tree directly under srcdir
-#	/.comstate.tof		# this file directly under srcdir
+#	/comstate.tof		# this file directly under srcdir
 #	.DS_Store		# this fiile anywhere
 #	desktop db		# Titanium Toast CD/DVD burner file
 #	desktop df		# Titanium Toast CD/DVD burner file
@@ -553,9 +553,9 @@ sub wanted($)
 	$File::Find::prune = 1;
 	return;
     }
-    if ($pathname eq "$srcdir/.comstate.tof") {
+    if ($pathname eq "$srcdir/comstate.tof") {
 	# skip this useless camera node
-	print "DEBUG: .comstate.tof prune #3 $pathname\n" if $opt_v > 3;
+	print "DEBUG: comstate.tof prune #3 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
