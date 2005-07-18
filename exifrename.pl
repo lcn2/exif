@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.20 $
-# @(#) $Id: exifrename.pl,v 1.20 2005/07/18 06:58:08 chongo Exp chongo $
+# @(#) $Revision: 1.21 $
+# @(#) $Id: exifrename.pl,v 1.21 2005/07/18 08:20:40 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.20 $, 10;
+my $VERSION = substr q$Revision: 1.21 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -417,7 +417,7 @@ sub dir_setup()
 #
 #	043			# roll number, 3 digits, 0 padded
 #	-			# (dash) separator
-#	101			# top subdir initial chars w/o -'s & lowercase
+#	101			# optional subdir lead chars, w/o -'s, lowercase
 #	-			# (dash) separator
 #	2005			# image 4 digit Year
 #	05			# image month, 2 digits [01-12]
@@ -549,11 +549,11 @@ sub wanted($)
     # and trailing /'s
     #
     print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
-    print "DEBUG: in wanted with: $File::Find::name\n" if $opt_v > 2;
+    print "DEBUG: File::Find::name: $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
     $pathname =~ s|(.)/+$|$1|;
-    print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
+    print "DEBUG: pathname: $pathname\n" if $opt_v > 1;
 
     # prune out anything that is directory or file
     #
@@ -668,16 +668,54 @@ sub wanted($)
 	return;
     }
 
-    # Determine the leading chars of the top level directory under $srcdir,
-    # in lowercase, with -'s (dashes) replaced with _'s (underscores).
-    # However if we are adding a readme file, then we will act as if
-    # the original file was directly under $srcdir.
+    # Determine 2nd part of the directory we will place the new file in.
+    #
+    # The directory we will place the new file in comes from the
+    # roll number, always followed by - (dash), followed by an
+    # optional roll_sub.  This code determines the roll_sub as follows:
+    #
+    #	If we are adding a readme file (-r readme), then we will act as if
+    #	the original file was directly under $srcdir.
+    #
+    #   Else if we are adding a file that is directly under $srcdir,
+    #	then our roll_sub will be empty.
+    #
+    #	Else use the directory that contains the source file to form roll_sub.
+    #	When that directory starts with 978- (3 digits and - (dash)), then we
+    #	remove heading 987-.
+    #
+    #	Next we canonicalize the roll_sub by converting to lower case,
+    #	replace -'s (dashes) with _'s (underscores), and by truncating
+    #	to the first "-s sdirlen" chars.
+    #
+    #   Finally we prepend the roll number follow by a - (dash).
+    #
+    # This means that the file:
+    #
+    #	$srcdir/200505/001-/001--20050515-103055-readme.txt
+    #	$srcdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
+    #	$srcdir/DCIM/101EOS1D/LS1F9876.CR2
+    #
+    # will end up with a roll_sub of:
+    #
+    #	001
+    #	001-100
+    #	001-101
+    #
+    # and wlll to be placed in:
+    #
+    #	$destdir/200505/001-/001--20050515-103055-readme.txt
+    #	$destdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
+    #	$destdir/200505/001-101/001-101-20050515-103055-ls1f9876.cr2
     #
     if ($adding_readme != 0) {
 	$roll_sub = "";
 	print "DEBUG: adding readme, using empty roll_sub\n" if $opt_v > 4;
     } elsif ($pathname =~ m|^$srcdir/[^/]+/|o) {
 	$roll_sub = basename(dirname($pathname));
+	if ($roll_sub =~ /^\d{3}-(.*)$/) {
+	    $roll_sub = $1;
+	}
 	print "DEBUG: orig roll_sub is: $roll_sub\n" if $opt_v > 4;
     } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
 	$roll_sub = "";
@@ -742,6 +780,7 @@ sub wanted($)
 	# we always add the -r readme file as readme.txt
 	$lowerfilename = "readme.txt";
     }
+    print "DEBUG: canonical lowerfilename: $lowerfilename\n" if $opt_v > 4;
 
     # If the lowercase name is already of the form:
     #
@@ -751,10 +790,11 @@ sub wanted($)
     # convert it to just ls1f5628.cr2 so that we won't keep adding
     # date strings to the filename.
     #
-    if ($lowerfilename =~ /^\d{3}-[^-]+-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+    if ($lowerfilename =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
 	$lowerfilename = $2;
     }
     $lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+    print "DEBUG: final lowerfilename: $lowerfilename\n" if $opt_v > 3;
 
     # convert the timestamp into date strings
     #
