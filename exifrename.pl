@@ -2,9 +2,9 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.18 $
-# @(#) $Id: exifrename.pl,v 1.18 2005/07/14 15:44:42 chongo Exp chongo $
-# @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
+# @(#) $Revision: 1.20 $
+# @(#) $Id: exifrename.pl,v 1.20 2005/07/18 05:42:38 chongo Exp $
+# @(#) $Source: /Users/chongo/tmp/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.18 $, 10;
+my $VERSION = substr q$Revision: 1.20 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -194,8 +194,16 @@ MAIN: {
     }
     $subdirchars = $opt_s if defined $opt_s;
     $rollfile = $opt_e if defined $opt_e;
+    # canonicalize srcdir removing leading ./'s, multiple //'s, trailing /'s
     $srcdir = $ARGV[0];
+    $srcdir =~ s|^(\./+)+||;
+    $srcdir =~ s|//+|/|g;
+    $srcdir =~ s|(.)/+$|$1|;
+    # canonicalize destdir removing leading ./'s, multiple //'s, trailing /'s
     $destdir = $ARGV[1];
+    $destdir =~ s|^(\./+)+||;
+    $destdir =~ s|//+|/|g;
+    $destdir =~ s|(.)/+$|$1|;
     if ($opt_v > 0) {
 	print "DEBUG:";
 	print " -a" if defined $opt_a;
@@ -437,6 +445,12 @@ sub dir_setup()
 #
 #	/constate.tof
 #
+# Sometimes after a crash, this file will be creaded:
+#
+#	._.Trashes
+#
+# To be safe, we ignore any file that has .Trashes on the end if its name.
+#
 # In addition, other files such as .DS_Store may be created by OS X.
 # These .DS_Store files should be ignored by the tool.  The Titanium
 # Toast CD/DVD burner creates "desktop db" and "desktop df" which
@@ -449,6 +463,7 @@ sub dir_setup()
 #	.DS_Store		# this fiile anywhere
 #	desktop db		# Titanium Toast CD/DVD burner file
 #	desktop df		# Titanium Toast CD/DVD burner file
+#	*.Trashes		# a file that ends in .Trashes
 #
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and symlinks in destdir.
@@ -522,12 +537,14 @@ sub wanted($)
 	$File::Find::topino = 0;
     }
 
-    # canonicalize the path by removing leading ./ and multiple //'s
+    # canonicalize the path by removing leading ./'s, multiple //'s
+    # and trailing /'s
     #
     print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
     print "DEBUG: in wanted with: $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
+    $pathname =~ s|(.)/+$|$1|;
     print "DEBUG: ready to process $pathname\n" if $opt_v > 1;
 
     # prune out anything that is directory or file
@@ -569,11 +586,20 @@ sub wanted($)
 	return;
     }
 
+    # prune out files that end in .Trashes
+    #
+    if ($filename =~ /.Trashes$/) {
+	# skip OS X .DS_Store files
+	print "DEBUG: *.Trashes prune #5 $pathname\n" if $opt_v > 3;
+	$File::Find::prune = 1;
+	return;
+    }
+
     # prune out Titanium Toast files
     #
     if ($filename =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	print "DEBUG: desktop prune #5 $pathname\n" if $opt_v > 3;
+	print "DEBUG: desktop prune #6 $pathname\n" if $opt_v > 3;
 	$File::Find::prune = 1;
 	return;
     }
@@ -582,17 +608,17 @@ sub wanted($)
     #
     if ($filename eq ".") {
 	# ignore but do not prune directories
-	print "DEBUG: . ignore #6 $pathname\n" if $opt_v > 3;
+	print "DEBUG: . ignore #7 $pathname\n" if $opt_v > 3;
     	return;
     }
     if ($filename eq "..") {
 	# ignore but do not prune directories
-	print "DEBUG: .. ignore #7 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .. ignore #8 $pathname\n" if $opt_v > 3;
     	return;
     }
     if ($filename eq "DCIM") {
 	# ignore but do not prune directories
-	print "DEBUG: DCIM ignore #8 $pathname\n" if $opt_v > 3;
+	print "DEBUG: DCIM ignore #9 $pathname\n" if $opt_v > 3;
     	return;
     }
 
@@ -607,7 +633,7 @@ sub wanted($)
 	($adding_readme != 0 && ! -e $File::Find::name)) {
 	# skip missing files
 	print STDERR "$0: Fatal: skipping missing file: $filename\n";
-	print "DEBUG: missing file prune #9 $pathname\n" if $opt_v > 1;
+	print "DEBUG: missing file prune #10 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(14) unless defined $opt_a;
 	return;
@@ -618,7 +644,7 @@ sub wanted($)
     if (($adding_readme == 0 && ! -f $filename) ||
 	($adding_readme != 0 && ! -f $File::Find::name)) {
 	# ignore but do not prune directories
-	print "DEBUG: dir ignore #10 $pathname\n" if $opt_v > 3;
+	print "DEBUG: dir ignore #11 $pathname\n" if $opt_v > 3;
     	return;
     }
 
@@ -628,7 +654,7 @@ sub wanted($)
 	($adding_readme != 0 && ! -r $File::Find::name)) {
 	# skip non-readable files
 	print STDERR "$0: Fatal: non-readable file: $filename\n";
-	print "DEBUG: non-readable file prune #11 $pathname\n" if $opt_v > 1;
+	print "DEBUG: non-readable file prune #12 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(15) unless defined $opt_a;
 	return;
@@ -724,8 +750,8 @@ sub wanted($)
 
     # convert the timestamp into date strings
     #
-    $yyyymm = strftime("%Y%m", gmtime($datestamp));
-    $dd = strftime("%d", gmtime($datestamp));
+    $yyyymm = strftime("%Y%m", localtime($datestamp));
+    $dd = strftime("%d", localtime($datestamp));
 
     # untaint yyyymm
     #
@@ -765,7 +791,7 @@ sub wanted($)
     # If the filename exists, start adding _X for X 0 to 99
     # after the seconds.
     #
-    $hhmmss = strftime("%H%M%S", gmtime($datestamp));
+    $hhmmss = strftime("%H%M%S", localtime($datestamp));
     $hhmmss_d = $hhmmss;	# assume no de-dup is needed
     $dupnum = 0;
     do {
