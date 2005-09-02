@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.21 $
-# @(#) $Id: exifrename.pl,v 1.21 2005/07/18 08:20:40 chongo Exp chongo $
+# @(#) $Revision: 1.22 $
+# @(#) $Id: exifrename.pl,v 1.22 2005/07/18 10:01:39 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.21 $, 10;
+my $VERSION = substr q$Revision: 1.22 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -371,8 +371,6 @@ sub dir_setup()
 # This function is a callback from the File::Find directory tree walker.
 # It will walk the $srcdir and copy/rename files as needed.
 #
-# We we process files under $srcdir, we copy them to $destdir.
-#
 # uses these globals:
 #
 #	$opt_c		see -c in program usage at top
@@ -555,7 +553,7 @@ sub wanted($)
     $pathname =~ s|(.)/+$|$1|;
     print "DEBUG: pathname: $pathname\n" if $opt_v > 1;
 
-    # prune out anything that is directory or file
+    # prune out anything that is neither a directory and nor a file
     #
     if (($adding_readme == 0 &&
          ! -d $filename && ! -f $filename) ||
