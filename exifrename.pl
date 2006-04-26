@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.23 $
-# @(#) $Id: exifrename.pl,v 1.23 2005/09/02 12:03:38 chongo Exp chongo $
+# @(#) $Revision: 1.24 $
+# @(#) $Id: exifrename.pl,v 1.24 2006/04/26 00:55:06 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.23 $, 10;
+my $VERSION = substr q$Revision: 1.24 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -115,7 +115,7 @@ my $help = qq{\n$usage
 	-t	     don't touch modtime to match EXIF/file image (def: do)
 
 	-h	     print this help message
-	-v 	     verbose / debug level
+	-v lvl 	     set verbose / debug level to lvl (def: 0)
 
 	srcdir	     source directory
 	destdir	     destination directory
@@ -883,15 +883,27 @@ sub wanted($)
     print "DEBUG: destination: $destname\n" if $opt_v > 1;
     print "DEBUG: destination path: $destpath\n" if $opt_v > 2;
 
+    # untaint pathname
+    #
+    if ($pathname =~ /$untaint/o) {
+	$pathname = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in pathname \n";
+	print "DEBUG: tainted pathname prune #21 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(41) unless defined $opt_a;
+	return;
+    }
+
     # untaint destpath
     #
     if ($destpath =~ /$untaint/o) {
 	$destpath = $1;
     } else {
 	print STDERR "$0: Fatal: strange chars in destpath \n";
-	print "DEBUG: tainted destpath prune #21 $pathname\n" if $opt_v > 0;
+	print "DEBUG: tainted destpath prune #22 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(41) unless defined $opt_a;
+	exit(42) unless defined $opt_a;
 	return;
     }
 
@@ -901,9 +913,9 @@ sub wanted($)
 	if (move($pathname, $destpath) == 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "mv $filename $destpath failed: $!\n";
-	    print "DEBUG: mv err prune #22 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: mv err prune #23 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(42) unless defined $opt_a;
+	    exit(43) unless defined $opt_a;
 	    return;
 	}
 	print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
@@ -911,22 +923,22 @@ sub wanted($)
 	if (copy($pathname, $destpath) == 0) {
 	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "cp $filename $destpath failed: $!\n";
-	    print "DEBUG: cp err prune #23 $pathname\n" if $opt_v > 0;
+	    print "DEBUG: cp err prune #24 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
-	    exit(43) unless defined $opt_a;
+	    exit(44) unless defined $opt_a;
 	    return;
 	}
 	print "DEBUG: success: cp $filename $destpath\n" if $opt_v > 2;
     }
 
-    # compare unless -t
+    # compare unless -m
     #
-    if (! defined $opt_c && compare($pathname, $destpath) != 0) {
+    if (! defined $opt_m && compare($pathname, $destpath) != 0) {
 	print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 		     "compare of $filename and $destpath failed\n";
-	print "DEBUG: cmp err prune #24 $pathname\n" if $opt_v > 0;
+	print "DEBUG: cmp err prune #25 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
-	exit(44) unless defined $opt_a;
+	exit(45) unless defined $opt_a;
 	return;
     }
     print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
