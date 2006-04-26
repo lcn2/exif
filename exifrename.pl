@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.22 $
-# @(#) $Id: exifrename.pl,v 1.22 2005/07/18 10:01:39 chongo Exp chongo $
+# @(#) $Revision: 1.23 $
+# @(#) $Id: exifrename.pl,v 1.23 2005/09/02 12:03:38 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.22 $, 10;
+my $VERSION = substr q$Revision: 1.23 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -498,8 +498,6 @@ sub wanted($)
     my $filename = $_;		# current filename within $File::Find::dir or
 				# absolute path of readme if $adding_readme!=0
     my $pathname;		# complete path $File::Find::name
-    my $nodedev;		# device of the current file
-    my $nodeino;		# inode number of the current file
     my $roll_sub;		# roll-subdir
     my ($errcode, $errmsg);	# form_dir return values
     my $lowerfilename;		# lower case filename
