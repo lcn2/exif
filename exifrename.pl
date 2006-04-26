@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.24 $
-# @(#) $Id: exifrename.pl,v 1.24 2006/04/26 00:55:06 chongo Exp chongo $
+# @(#) $Revision: 1.25 $
+# @(#) $Id: exifrename.pl,v 1.25 2006/04/26 01:13:06 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.24 $, 10;
+my $VERSION = substr q$Revision: 1.25 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -70,6 +70,7 @@ my %mname = (
 my $subdirchars = 3;	# number of initial chars of subdir to use in path
 my $rollfile;		# file that keeps track of next roll number
 my $adding_readme = 0;	# 1 ==> calling wanted from add_readme(), not find()
+my $premv_nonexif = 0;	# 1 ==> move non EXIF files first then move EXIF files
 
 
 # EXIF timestamp related tag names to look for
@@ -298,8 +299,17 @@ MAIN: {
     $exiftool = new Image::ExifTool;
     $exiftool->Options(%exifoptions);
 
-    # walk the srcdir, making renamed copies and symlinks
+    # walk the srcdir, making renamed copies (or moves) and symlinks
     #
+    if (defined $opt_m) {
+	# when moving, move non-EXIF files first
+	$premv_nonexif = 1;
+    	print "DEBUG: about to pre-move non-EXIF files\n" if ($opt_v > 1);
+	find(\%find_opt, $srcdir);
+	# now move EXIF files
+    	print "DEBUG: now moving EXIF files\n" if ($opt_v > 1);
+	$premv_nonexif = 0;
+    }
     find(\%find_opt, $srcdir);
 
     # load the readme file if -r readme was given
@@ -470,6 +480,8 @@ sub dir_setup()
 #	desktop db		# Titanium Toast CD/DVD burner file
 #	desktop df		# Titanium Toast CD/DVD burner file
 #	*.Trashes		# a file that ends in .Trashes
+#	.Spotlight-*		# Spotlight index files
+#	.((anything))		# files and dirs that start with .
 #
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and symlinks in destdir.
@@ -511,6 +523,7 @@ sub wanted($)
     my $dupnum;		# _number de-duplication number
     my $destname;	# the destination filename to form
     my $destpath;	# the full path of the destination file
+    my $exiffound;	# 1 ==> valid EXIF time data found, 0 ==> no EXIF time
 
     # If we are being called from add_readme() instead of find(),
     # then we have to simulate a File::Find call by setting the
@@ -608,6 +621,15 @@ sub wanted($)
 	return;
     }
 
+    # prune out Spotlight index directories
+    #
+    if ($filename =~ /^\.Spotlight-/i) {
+	# skip Spotlight index directories
+	print "DEBUG: Spotlight prune #7 $pathname\n" if $opt_v > 3;
+	$File::Find::prune = 1;
+	return;
+    }
+
     # ignore names that match common directories
     #
     if ($filename eq ".") {
@@ -624,6 +646,15 @@ sub wanted($)
 	# ignore but do not prune directories
 	print "DEBUG: DCIM ignore #9 $pathname\n" if $opt_v > 3;
     	return;
+    }
+
+    # prune out anything that start with . (we alerady processed . and ..)
+    #
+    if ($filename =~ /^\../) {
+	# skip . files and dirs
+	print "DEBUG: dot-file/dir prune #8 $pathname\n" if $opt_v > 3;
+	$File::Find::prune = 1;
+	return;
     }
 
     # ignore missing files
@@ -744,7 +775,7 @@ sub wanted($)
 
     # determine the date of the image by EXIF or filename date
     #
-    ($datecode, $datestamp) = timestamp($pathname);
+    ($datecode, $datestamp, $exiffound) = timestamp($pathname);
     if ($datecode != 0) {
 	print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
 		     "$datestamp\n";
@@ -754,6 +785,33 @@ sub wanted($)
 	return;
     }
     print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
+
+    # If we are moving and we are only moving non-EXIF files, then
+    # ignore bug to not prune EXIF data was found
+    #
+    # We must move non-EXIF files first because we need the EXIF data
+    # from the related EXIF file.   To see why, consider the case where
+    # we have:
+    #
+    #	.../inputdir/foo.cr2
+    #	.../inputdir/foo.wav
+    #
+    # The timesstamp on the destination filename for foo.wav (which
+    # does not have EXIF data) depends on foo.cr2 (which has EXIF data).
+    #
+    # When we copy, there is file ordering problem.  When it comes time to
+    # copy foo.wav, we have the original foo.cr2 to consult.  However in
+    # the case of moving, if we move foo.cr2 first, then foo.wav no longer
+    # has an associated EXIF file under the ../inputdir/ directory.
+    #
+    # To solve this problem, when moving, we move files without EXIF data
+    # first, then on a 2nd pass we move everything else.
+    #
+    if (defined $opt_m && $premv_nonexif == 1 && $exiffound == 1) {
+	# ignore but do not prune file with EXIF data when moving non-EXIF files
+	print "DEBUG: EXIF 1st move pass ignore #10 $pathname\n" if $opt_v > 2;
+    	return;
+    }
 
     # untaint datestamp
     #
@@ -941,7 +999,9 @@ sub wanted($)
 	exit(45) unless defined $opt_a;
 	return;
     }
-    print "DEBUG: success: cmp $filename $destpath\n" if $opt_v > 2;
+    if ($opt_v > 2 && ! defined $opt_m) {
+	print "DEBUG: success: cmp $filename $destpath\n";
+    }
 
     # set the access and modification time unless -t
     #
@@ -993,9 +1053,10 @@ sub wanted($)
 #	$filename	image filename to process
 #
 # returns:
-#	($exitcode, $message)
+#	($exitcode, $message, $exiffound)
 #	    $exitcode:	0 ==> OK, else ==> exit code
 #	    $message:	$exitcode==0 ==> timestamp, else error message
+#	    $exiffound:	1 ==> valid EXIF time data found, 0 ==> no EXIF time
 #
 sub timestamp($)
 {
@@ -1014,12 +1075,12 @@ sub timestamp($)
     ($errcode, $timestamp) = exif_date($filename);
     if ($errcode == 0) {
 	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
-	return (0, $timestamp);
+	return (0, $timestamp, 1);
     }
     print "DEBUG: EXIF timestamp $filename: return code: $errcode: ",
     	  "$timestamp\n" if $opt_v > 4;
 
-    # We did not find a valif EXIF in gthe filename, so we will
+    # We did not find a valid EXIF in the filename, so we will
     # look for related files that might have EXIF data
     #
     ($filename_dev, $filename_ino, ) = stat($filename);
@@ -1066,7 +1127,7 @@ sub timestamp($)
 	    if ($errcode == 0) {
 		print "DEBUG: found related EXIF timestamp in $exif_file: ",
 			"$timestamp\n" if $opt_v > 4;
-		return (0, $timestamp);
+		return (0, $timestamp, 0);
 	    }
 	    print "DEBUG: EXIF timestamp $filename: EXIF code: $errcode: ",
 		  "$timestamp\n" if $opt_v > 5;
@@ -1083,7 +1144,7 @@ sub timestamp($)
 	if ($errcode == 0) {
 	    print "DEBUG: text timestamp for file: $filename: $timestamp\n"
 	        if $opt_v > 4;
-	    return (0, $timestamp);
+	    return (0, $timestamp, 0);
 	}
 	print "DEBUG: no valid text date found in $filename\n" if $opt_v > 4;
     }
@@ -1102,7 +1163,7 @@ sub timestamp($)
 	    	  "$timestamp\n";
 	}
     }
-    return ($errcode, $timestamp);
+    return ($errcode, $timestamp, 0);
 }
 
 
