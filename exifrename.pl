@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 1.25 $
-# @(#) $Id: exifrename.pl,v 1.25 2006/04/26 01:13:06 chongo Exp chongo $
+# @(#) $Revision: 1.26 $
+# @(#) $Id: exifrename.pl,v 1.26 2006/04/26 02:08:17 chongo Exp $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
@@ -35,7 +35,7 @@
 use strict;
 use bytes;
 use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
-            $opt_s $opt_r $opt_n);
+            $opt_s $opt_r $opt_n $opt_y $opt_z);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.25 $, 10;
+my $VERSION = substr q$Revision: 1.26 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -71,6 +71,8 @@ my $subdirchars = 3;	# number of initial chars of subdir to use in path
 my $rollfile;		# file that keeps track of next roll number
 my $adding_readme = 0;	# 1 ==> calling wanted from add_readme(), not find()
 my $premv_nonexif = 0;	# 1 ==> move non EXIF files first then move EXIF files
+my $mv_fwd_chars = 4;	# chars after initial -z skchars put near filename front
+my $mv_end_chars = 4;	# initial -z skchars put near end of filename
 
 
 # EXIF timestamp related tag names to look for
@@ -101,29 +103,29 @@ my $mintime = 500000000;
 # usage and help
 #
 my $usage = "$0 [-a] [-c] [-e exifroll] [-m] [-n rollnum] [-o]\n" .
-	"\t[-r readme] [-s sdirlen] [-t]\n" .
-	"\t[-h] [-v lvl] srcdir destdir";
+	"    [-r readme] [-s sdirlen] [-t] [-y seqlen] [-z skchars]\n" .
+	"    [-h] [-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
-	-a	     don't abort/exit after a fatal error (def: do)
-	-e exifroll  read roll number from exifroll (def: ~/.exifroll)
-	-c	     don't verify/compare files after they are copied (def: do)
-	-m	     move, do not copy files from srcdir to destdir (def: copy)
-	-n rollnum   roll is rollnum, dont update exifroll (def: use ~/exifroll)
-	-o	     overwrite, don't add _# after time on duplicates (def: add)
-	-r readme    add readme as if it was srcdir/readme.txt (def: don't)
-	-s sdirlen   initial top sub-dir chars to use (def: 3, 0 ==> use all)
-	-t	     don't touch modtime to match EXIF/file image (def: do)
+    -a           don't abort/exit after a fatal error (def: do)
+    -c           don't verify/compare files after they are copied (def: do)
+    -e exifroll  read roll number from exifroll (def: ~/.exifroll)
+    -m           move, do not copy files from srcdir to destdir (def: copy)
+    -n rollnum   roll is rollnum, dont update exifroll (def: use ~/exifroll)
+    -o           overwrite, don't add _# after time on duplicates (def: add)
+    -r readme    add readme as if it was srcdir/readme.txt (def: don't)
+    -s sdirlen   initial top sub-dir chars to use (def: 3, 0 ==> use all)
+    -t           don't touch modtime to match EXIF/file image (def: do)
+    -y seqlen    sequnce length, image filename chars after skchars (def: 4)
+    -z skchars    initial imagename chars not part of sequence number (def: 4)
 
-	-h	     print this help message
-	-v lvl 	     set verbose / debug level to lvl (def: 0)
+    -h           print this help message
+    -v lvl       set verbose / debug level to lvl (def: 0)
 
-	srcdir	     source directory
-	destdir	     destination directory
+    srcdir       source directory
+    destdir      destination directory
 
-    NOTE:
-	exit 0	all is OK
-	exit >0 some fatal error
+    NOTE: exit 0 means all is OK, exit >0 meanss some fatal error
 
     Version: $VERSION};
 my %optctl = (
@@ -138,6 +140,8 @@ my %optctl = (
     "t" => \$opt_t,
     "s=i" => \$opt_s,
     "v=i" => \$opt_v,
+    "y=i" => \$opt_y,
+    "z=i" => \$opt_z,
 );
 
 
@@ -200,6 +204,14 @@ MAIN: {
 	print STDERR "$0: -e exifroll conflights with -n rollnum\n";
 	exit(5);
     }
+    if (defined $opt_y && $opt_y < 0) {
+	print STDERR "$0: -y seqlen must be >= 0\n";
+	exit(6);
+    }
+    if (defined $opt_z && $opt_z < 0) {
+	print STDERR "$0: -z skchars must be >= 0\n";
+	exit(7);
+    }
     $subdirchars = $opt_s if defined $opt_s;
     $rollfile = $opt_e if defined $opt_e;
     # canonicalize srcdir removing leading ./'s, multiple //'s, trailing /'s
@@ -212,6 +224,8 @@ MAIN: {
     $destdir =~ s|^(\./+)+||;
     $destdir =~ s|//+|/|g;
     $destdir =~ s|(.)/+$|$1|;
+    $mv_fwd_chars = $opt_y if defined $opt_y;
+    $mv_end_chars = $opt_z if defined $opt_z;
     if ($opt_v > 0) {
 	print "DEBUG:";
 	print " -a" if defined $opt_a;
@@ -224,6 +238,8 @@ MAIN: {
 	print " -s $opt_s" if defined $opt_s;
 	print " -t" if defined $opt_t;
 	print " -v $opt_v" if $opt_v > 0;
+	print " -y $opt_y" if defined $opt_y;
+	print " -z $opt_z" if defined $opt_z;
 	print " $srcdir $destdir\n";
     }
     if ($opt_v > 1) {
@@ -266,19 +282,19 @@ MAIN: {
     	$srcdir = $1;
     } else {
 	print STDERR "$0: bogus chars in srcdir\n";
-	exit(6);
+	exit(8);
     }
     if ($destdir =~ /$untaint/o) {
     	$destdir = $1;
     } else {
 	print STDERR "$0: bogus chars in destdir\n";
-	exit(7);
+	exit(9);
     }
     if ($rollfile =~ /$untaint/o) {
     	$rollfile = $1;
     } else {
 	print STDERR "$0: bogus chars in -e filename\n";
-	exit(8);
+	exit(10);
     }
 
     # setup directories
@@ -388,6 +404,8 @@ sub dir_setup()
 #	$opt_f		see -f in program usage at top
 #	$opt_o		see -o in program usage at top
 #	$opt_t		see -t in program usage at top
+#	$mv_fwd_chars	see -y seqlen in program usage at top
+#	$mv_end_chars	see -z skchars in program usage at top
 #	$srcdir		where images are from
 #	$destdir	where copied and renamed files go
 #	$rollnum	EXIF roll number
@@ -395,7 +413,7 @@ sub dir_setup()
 #
 # Consider the a file under srcdir:
 #
-#	/srcdir/DCIM/101EOS1D/LS1F5627.CR2
+#	/srcdir/DCIM/101EOS1D/PV5V5627.CR2
 #
 # Assume that the EXIF timestamp (or file timestamp if if lacks
 # EXIF timestamp tags) is:
@@ -404,40 +422,108 @@ sub dir_setup()
 #
 # Then we will create the file:
 #
-#    /destdir/200505/043-101/043-101-20050512-152545-ls1f5627.cr2
+#    /destdir/200505/2005005-043/200505-043-101/121525+5627-45-200505-043-101-pg5v.cr2
 #
 # The created file path is:
 #
 #	/destdir			# destdir path of image library
 #	/200505				# image year & month
-#	/043-101			# roll-subdir
-#	/043-101-20050512-152545-ls1f5627.cr2	# image filename (see below)
+#	/200505-043			# image year & month, - (dash), roll
+#	/200505-043-010			# year & month, -, roll, -, roll-subdir
+#	/121525+5627-45-200505-043-101-pg5v.cr2	# image filename (see below)
 #
-# The filename itself:
+# NOTE: The property of directory names under /destdir that they are
+#	unuqie  and standalone.  One can look at one of these sub-directories
+#	and know where it belongs.  That is why the yyyymm and yyyymm-roll
+#	are repeated in the lower level directories.
 #
-#	043-101-20050512-152545-ls1f5627.cr2
+# NOTE: The property of a filename is that they completely define the
+#	directory path under whey they belong.  One can look at a filename
+#	and know where it belongs.
 #
-# If another image was taken during the same second, its name becomes:
+# NOTE: Another important property of a filename is that the original
+#	image filename can be re-constructed.  Consider these filenames:
 #
-#	043-101-20050512-152545_1-ls1f5628.cr2
+#		121525+5627-45-200505-043-101-pg5v.cr2
+#		121525+5627-45_1-200505-043-101-pg5v_stuff.cr2
+#
+#	the original image filenames were:
+#
+#		PGV55627.CR2
+#		PGV55627STUFF.CR2
+#
+# Consider this filename:
+#
+#	121525+5627-45-200505-043-101-pg5v.cr2
+#
+# If another image was taken during the same second, that 2nd image becomes:
+#
+#	121525+5627-45_1-200505-043-101-pg5v.cr2
 #
 # is constructed out of the following:
 #
-#	043			# roll number, 3 digits, 0 padded
-#	-			# (dash) separator
-#	101			# optional subdir lead chars, w/o -'s, lowercase
-#	-			# (dash) separator
-#	2005			# image 4 digit Year
-#	05			# image month, 2 digits [01-12]
-#	12			# image day of month, 2 digits [01-31]
-#	-			# (dash) separator
+#	12			# image day of month (UTC), 2 digits [01-31]
 #	15			# image hour (UTC), 2 digits [00-23]
-#	25			# image minute of hour, 2 digits [00-59]
-#	45			# image seconf of minites, 2 digits [00-60]
+#	25			# image minute of hour (UTC), 2 digits [00-59]
+#	- or +			# - ==> has no sound file, + has sound file
+#	5627			# image sequence number (see NOTE below)
+#	-			# (dash) separator
+#	45			# image second of minites, 2 digits [00-60]
 #	     _			# (underscore) optional for dups in same sec
 #	     1			# optional digits for dups in same sec
 #	-			# (dash) separator
-#	ls1f5627.cr2		# image basename, in lower case w/o -'s
+#	2005			# image 4 digit Year (UTC)
+#	05			# image month (UTC), 2 digits [01-12]
+#	-			# (dash) separator
+#	043			# roll number, 3 digits, 0 padded
+#	-			# (dash) separator
+#	101			# optional subdir lead chars, w/o -'s lowercase
+#	-			# (dash) separator
+#	pg5v			# imagename w/o 5th-8th chars, lowercase no -'s
+#	    _			# (underscore) optional if trailing chars
+#	    rest		# optional trailing image filename chars
+#	.cr2			# .extension
+#
+# NOTE: The number of leading image filename chars between the UTC ddhhmm- and
+#	the -ss, defaults to 4 characters.  The default length can be changed
+#	by the -y seqlen option.  These chars come from the image filename
+#	after it has been lower cased and had -'s removed AND the initial
+#	image filename chars (which also defaults to 4 and may be changed
+#	by the -z skchars option) have been skipped.
+#
+#	By default, the 1st 4 chars of the image filename are not used as part
+#	of the image sequence number.  These initial image filename characters
+#	are usually fixed for a given camera and are left on the end of
+#	the filename.  This default not-used length can be changed by
+#	the -z skchars option.
+#
+#	If there are any remainng image filename chars beyond the sequence
+#	number and before the .file extension, we put them after an _
+#	(underscore) character.
+#
+#	A typical Canon EOS 1D Mark II N image filename:
+#
+#		pg5v5627.cr2
+#
+#	would, by default, have its chars moved into a filename of this form:
+#
+#		dddhhmm-5627-...-pg5v.cr2
+#
+#	The image filename:
+#
+#		LLLLnnnnXyzzy.ext
+#
+#	would, by default, have its chars moved into a filename of this form:
+#
+#		ddhhmm-nnnn-....-LLLL_Xyzzy.ext
+#
+#	The image filename:
+#
+#		LLLnnnnnWh-ey.ext
+#
+#	with -y 5 -z 3 would produce a filename of this form:
+#
+#		ddhhmm-nnnnn-....-LLL_Whey.ext
 #
 # The 3 digit roll serial number from the file:
 #
@@ -518,8 +604,9 @@ sub wanted($)
     my $datestamp;	# EXIF or filename timestamp of OK, or error msg
     my $yyyymm;		# EXIF or filename timestamp year and month
     my $dd;		# EXIF or filename timestamp day
-    my $hhmmss;		# EXIF or filename timestamp time
-    my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
+    my $hhmm;		# EXIF or filename timestamp hour and minute
+    my $ss;		# EXIF or filename timestamp second
+    my $ss_d;		# EXIF or filename timestamp second and optional _#
     my $dupnum;		# _number de-duplication number
     my $destname;	# the destination filename to form
     my $destpath;	# the full path of the destination file
@@ -695,45 +782,92 @@ sub wanted($)
 	return;
     }
 
-    # Determine 2nd part of the directory we will place the new file in.
+    # determine the date of the image by EXIF or filename date
+    #
+    ($datecode, $datestamp, $exiffound) = timestamp($pathname);
+    if ($datecode != 0) {
+	print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
+		     "$datestamp\n";
+	print "DEBUG: bad timestamp prune #13 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(33) unless defined $opt_a;
+	return;
+    }
+    print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
+
+    # convert timestamp to UTC year and month
+    #
+    $yyyymm = strftime("%Y%m", localtime($datestamp));
+    if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
+	$yyyymm = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in yyyymm \n";
+	print "DEBUG: tainted yyyymm prune #14 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(34) unless defined $opt_a;
+	return;
+    }
+
+    # convert timestamp to UTC day of month
+    #
+    $dd = strftime("%d", localtime($datestamp));
+    if (defined $dd && $dd =~ /$untaint/o) {
+	$dd = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in dd \n";
+	print "DEBUG: tainted dd prune #15 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(35) unless defined $opt_a;
+	return;
+    }
+
+    # convert timestamp to UTC hour and minute
+    #
+    $hhmm = strftime("%H%M", localtime($datestamp));
+    if (defined $hhmm && $dd =~ /$untaint/o) {
+	$hhmm = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in dd \n";
+	print "DEBUG: tainted dd prune #16 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(36) unless defined $opt_a;
+	return;
+    }
+
+    # convert timestamp to UTC second
+    #
+    $ss = strftime("%S", localtime($datestamp));
+    if (defined $ss && $ss =~ /$untaint/o) {
+	$ss = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in dd \n";
+	print "DEBUG: tainted dd prune #17 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(37) unless defined $opt_a;
+	return;
+    }
+
+    # Determine the roll_sub name.
     #
     # The directory we will place the new file in comes from the
-    # roll number, always followed by - (dash), followed by an
+    # UTC timestamp year, - (dash), roll number, - (dash), followed by an
     # optional roll_sub.  This code determines the roll_sub as follows:
     #
-    #	If we are adding a readme file (-r readme), then we will act as if
+    #	1) If we are adding a readme file (-r readme), then we will act as if
     #	the original file was directly under $srcdir.
     #
-    #   Else if we are adding a file that is directly under $srcdir,
-    #	then our roll_sub will be empty.
+    #   2) If we are adding a file that is directly under $srcdir,
+    #	then our roll_sub will be empty,
     #
-    #	Else use the directory that contains the source file to form roll_sub.
-    #	When that directory starts with 978- (3 digits and - (dash)), then we
-    #	remove heading 987-.
+    #	3) else use the directory that contains the source file to form
+    #	roll_sub.  When that directory starts with 978- (3 digits and 
+    #	- (dash)), then we remove heading 987-.
     #
-    #	Next we canonicalize the roll_sub by converting to lower case,
+    #	4) Next we canonicalize the roll_sub by converting to lower case,
     #	replace -'s (dashes) with _'s (underscores), and by truncating
     #	to the first "-s sdirlen" chars.
     #
-    #   Finally we prepend the roll number follow by a - (dash).
-    #
-    # This means that the file:
-    #
-    #	$srcdir/200505/001-/001--20050515-103055-readme.txt
-    #	$srcdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
-    #	$srcdir/DCIM/101EOS1D/LS1F9876.CR2
-    #
-    # will end up with a roll_sub of:
-    #
-    #	001
-    #	001-100
-    #	001-101
-    #
-    # and wlll to be placed in:
-    #
-    #	$destdir/200505/001-/001--20050515-103055-readme.txt
-    #	$destdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
-    #	$destdir/200505/001-101/001-101-20050515-103055-ls1f9876.cr2
+    #	5) Finally we prepend the roll number followed by a - (dash).
     #
     if ($adding_readme != 0) {
 	$roll_sub = "";
@@ -772,19 +906,6 @@ sub wanted($)
 	exit(34) unless defined $opt_a;
 	return;
     }
-
-    # determine the date of the image by EXIF or filename date
-    #
-    ($datecode, $datestamp, $exiffound) = timestamp($pathname);
-    if ($datecode != 0) {
-	print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
-		     "$datestamp\n";
-	print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(35) unless defined $opt_a;
-	return;
-    }
-    print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
 
     # If we are moving and we are only moving non-EXIF files, then
     # ignore bug to not prune EXIF data was found
@@ -838,34 +959,48 @@ sub wanted($)
 
     # If the lowercase name is already of the form:
     #
-    #	043-101-20050512-152545-ls1f5628.cr2
-    #	043-101-20050512-152545_1-ls1f5628.cr2
+    #	121525+5627-45-200505-043-101-pg5v.cr2
+    #	121525+5627-45_1-200505-043-101-pg5v.cr2
     #
-    # convert it to just ls1f5628.cr2 so that we won't keep adding
-    # date strings to the filename.
+    # we convert it back to:
     #
-    if ($lowerfilename =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
-	$lowerfilename = $2;
+    #	pg5v5628.cr2
+    #
+    # This is so that we won't keep adding date strings, roll numbers, etc
+    # to files that already have them.
+    #
+    # Also filenames of the form:
+    #
+    #	121525+5627-45-200505-043-101-pg5v_stuff.cr2
+    #	121525+5627-45_1-200505-043-101-pg5v_stuff.cr2
+    #
+    # are converted into:
+    #
+    #	pg5v5628stuff.cr2
+    #
+    # as well.
+    #
+    if ($lowerfilename =~ m{
+    			  \d{6}		# ddmmhh
+			  [-+]		# - (dash) or + (plus) separator
+			  ([^-]*)	# $1: sequence number
+			  -		# - (dash) separator
+			  \d{2}		# ss
+			  (_\d+)?	# $2: opt digits for dups in same sec
+			  \d{6}		# yyyymm
+			  -		# - (dash) separator
+			  [^-]*		# roll number
+			  -		# - (dash) separator
+			  [^-]*		# sub-roll number
+			  -		# - (dash) separator
+			  ([^_.]*)	# $3: image filename chars before seqnum
+			  (_[^.]*)?	# $4: optiinal imagename chars after seq
+			  (\..*)?$	# $5: optional .extension
+    			  }ix) {
+	$lowerfilename = $3 . $1 . substr($4, 1) . $5;
     }
     $lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
     print "DEBUG: final lowerfilename: $lowerfilename\n" if $opt_v > 3;
-
-    # convert the timestamp into date strings
-    #
-    $yyyymm = strftime("%Y%m", localtime($datestamp));
-    $dd = strftime("%d", localtime($datestamp));
-
-    # untaint yyyymm
-    #
-    if ($yyyymm =~ /$untaint/o) {
-	$yyyymm = $1;
-    } else {
-	print STDERR "$0: Fatal: strange chars in yyyymm \n";
-	print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(37) unless defined $opt_a;
-	return;
-    }
 
     # ensure the $destdir/yyyymm/rol-sub direct path exists
     #
@@ -1027,8 +1162,8 @@ sub wanted($)
 #
 # It is frequently the case that non-EXIF files created by cameras
 # have a filename that is similar to an image file.  For example on
-# the Canon EOS 1D Mark II, one may have an image file "ls1f5627.cr2"
-# and a related sound file "ls1f5627.wav".  It would be useful to
+# the Canon EOS 1D Mark II N, one may have an image file "pg5v5627.cr2"
+# and a related sound file "pg5v5627.wav".  It would be useful to
 # associate the wav file with the image file.  Therefore an attempt
 # will be made to look for a corresponding EXIF image file when
 # a non-EXIF file is found.
@@ -1036,8 +1171,8 @@ sub wanted($)
 # When we are called, we will look for a readable file that has the same
 # basename as our $filename arg, but with an extension that implies
 # it is an image file.  For example, if we are called with a filename of
-# "/.../ls1f5627.wav", we will look for readable files such as
-# "/.../ls1f5627.cr2", "/.../ls1f5627.jpg", etc.
+# "/.../pg5v5627.wav", we will look for readable files such as
+# "/.../pg5v5627.cr2", "/.../pg5v5627.jpg", etc.
 #
 # The order of extensions is defined by the @exif_ext array.  We will
 # search for readable files in order of that array.  If we find a
@@ -1048,6 +1183,20 @@ sub wanted($)
 # create/modify timestamp.
 #
 # NOTE: The non-EXIF and related EXIF files must be in the same directory.
+#
+# NOTE: Regarding image filenames created by cameras:
+#
+# As created on the card, Different cameras have different image filenames.
+# For example:
+#
+#	Canon EOS 1D Mark II N:		PG5V5627.CR2
+#	Canon EOS 1D Mark II:		LS1F5627.CR2
+#	Canon 20D (and 20Da):		IMG_5627.CR2
+#
+# Some cameras, such as the Canon EOS 1D Mark II N, have the ability to
+# change the leading 4 characters of the image filename.  Some cameras
+# place images in a sub-directory while others do not.  Some cameras allow
+# to name the folder, while others do not.
 #
 # given:
 #	$filename	image filename to process
