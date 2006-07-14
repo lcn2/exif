@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.1 $
-# @(#) $Id: exifrename.pl,v 2.1 2006/07/13 00:31:40 chongo Exp chongo $
+# @(#) $Revision: 2.2 $
+# @(#) $Id: exifrename.pl,v 2.2 2006/07/13 19:43:37 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.1 $, 10;
+my $VERSION = substr q$Revision: 2.2 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -69,9 +69,11 @@ my %mname = (
 );
 my $subdirchars = 3;	# number of initial chars of subdir to use in path
 my $rollfile;		# file that keeps track of next roll number
-my $adding_readme = 0;	# 1 ==> calling wanted from add_readme(), not find()
 my $mv_fwd_chars = 4;	# chars after initial -z skchars put near filename front
 my $mv_end_chars = 4;	# initial -z skchars put near end of filename
+my $readme_path = undef;	# if -r readme, this is the absolute path
+my $readme_dev = undef;		# if -r readme, this is the device number
+my $readme_ino = undef;		# if -r readme, this is the inode number
 
 
 # EXIF timestamp related tag names to look for
@@ -92,28 +94,21 @@ my @exif_ext = qw(
     eps EPS
 );
 
-# file extensions that do not have EXIF data which are likely to
-# be created by a camera
-#
-my @nonexif_ext = qw(
-    wav WAV
-    mp3 MP3
-    txt TXT
-    rtf RTF
-    ps PS
-);
-
-# combined nonexif_ext and exif_ext set
-#
-my @all_ext;
-
 # hash of potential files found walking $srcdir giving basename
 #
-#	$found_name{$path} == basename of $path
-#	$found_devino{$path} == file_dev/file_inum
+#	$path_basename{$path} == basename of $path
+#	$path_basenoext{$path} == basename of $path w/o .ext
+#	$devino_path{"file_dev/file_inum"} == path
+#	$need_plus{$path} == 0 ==> use -, 1 ==> multiple found, use +
+#	$basenoext_pathset{$basenoext} == array of paths with dup base w/o .ext
+#	$pathset_timestamp{$basenoext} == timestamp for this pathset
 #
-my %found_name;
-my %found_devino;
+my %path_basename;
+my %path_basenoext;
+my %devino_path;
+my %need_plus;
+my %basenoext_pathset;
+my %pathset_timestamp;
 
 # timestamps prior to:
 #	Tue Nov  5 00:53:20 1985 UTC
@@ -171,24 +166,25 @@ my %optctl = (
 #
 sub wanted();
 sub dir_setup();
-sub timestamp($);
+sub get_timestamp($);
 sub exif_date($);
 sub file_date($);
 sub text_date($);
 sub form_dir($);
 sub roll_setup();
 sub readme_check($);
-sub add_readme($);
-sub hash_dup_count($);
+
+sub old_timestamp($);	# XXX - remove when code complete
+sub old_wanted();	# XXX - remove when code complete
 
 
 # setup
 #
-MAIN: {
+MAIN: 
+{
     my %find_opt;	# File::Find directory tree walk options
     my %exifoptions;	# Image::ExifTool options
-    my $lasti;		# previous value of $i
-    my $i;		# index value
+    my $i;
 
     # setup
     #
@@ -200,8 +196,6 @@ MAIN: {
     $opt_v = 0;
     $ENV{HOME} = "/" unless defined $ENV{HOME};
     $rollfile = "$ENV{HOME}/.exifroll";
-    @all_ext = @exif_ext;
-    push(@all_ext, @nonexif_ext);
 
     # parse args
     #
@@ -288,9 +282,14 @@ MAIN: {
     }
     # sanity check readme if -r readme was given
     if (defined $opt_r) {
-	$opt_r = readme_check($opt_r);
+	$readme_path = readme_check($opt_r);
 	print "DEBUG: will add $opt_r as it was ",
 	      "$srcdir/readme.txt\n" if $opt_v > 1;
+	($readme_dev, $reame_ino,) = stat($readme_path);
+	if (! defined $readme_dev || ! defined $readme_ino) {
+	    print STDERR "$0: FATAL: stat error on $readme_path: $!\n";
+	    exit(8);
+	}
     }
 
     # setup to walk the srcdir
@@ -309,19 +308,19 @@ MAIN: {
     	$srcdir = $1;
     } else {
 	print STDERR "$0: FATAL: bogus chars in srcdir\n";
-	exit(8);
+	exit(9);
     }
     if ($destdir =~ /$untaint/o) {
     	$destdir = $1;
     } else {
 	print STDERR "$0: FATAL: bogus chars in destdir\n";
-	exit(9);
+	exit(10);
     }
     if ($rollfile =~ /$untaint/o) {
     	$rollfile = $1;
     } else {
 	print STDERR "$0: FATAL: bogus chars in -e filename\n";
-	exit(10);
+	exit(11);
     }
 
     # setup directories
@@ -342,9 +341,27 @@ MAIN: {
     $exiftool = new Image::ExifTool;
     $exiftool->Options(%exifoptions);
 
-    # walk the srcdirr collecting useful paths in found_name and found_devino
+    # walk the srcdir collecting information about useful paths of files
+    #
+    # NOTE: See the wanted() function for details.
     #
     find(\%find_opt, $srcdir);
+
+    # determine the timestamp for each pathset
+    #
+    foreach $i ( keys %basenoext_pathset ) {
+	my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
+	my $message;	# $exitcode==0 ==> timestamp, else error message
+
+	($exitcode, $message) = get_timestamp($basenoext_pathset{$i});
+	if ($exitcode == 0) {
+	    $pathset_timestamp{$i} = $message;
+	} else {
+	    print STDERR "$0: FATAL: file timestamp: pathset: $i: ",
+	    	  "error: $errcode: $timestamp\n";
+	    exit(12);
+	}
+    }
 
     # all done
     #
@@ -410,10 +427,23 @@ sub dir_setup()
 # that are not obvious non-image directories, we collect filenames
 # of potential image and meta-image files.
 #
-# We setup two hashes, %found_name for mapping paths to basenames,
-# and %found_devino for mapping paths to device/inum pairs.
-# The %found_devino allows us to determine if we processed the
+# We setup two hashes, %path_basename for mapping paths to basenames,
+# and %devino_path for mapping device/inum pairs to paths.
+# The %devino_path allows us to determine if we processed the
 # same file twice.
+#
+# We setup the %path_basenoext for mapping paths to basenames w/o .ext.
+# So while $path_basename{"/tmp/foo.bar"} == "foo.bar", the
+# $path_basenoext{"/tmp/foo.bar} == "foo".
+#
+# We fill in %need_plus to mark with paths will need +'s in their
+# destination name and with need just -'s.
+#
+# For each basename of a path w/o .ext, we maintain an array of
+# paths for that basename w/o .ext.  If $need_plus{$path} == 1, then
+# $basenoext_pathset{$path} will be an array with 2 or more elements.
+# If $need_plus{$path} == 0, then $basenoext_pathset{$path} will be
+# an array with just 1 element.
 #
 ####
 #
@@ -482,6 +512,8 @@ sub wanted($)
 {
     my $file = $_;		# current filename within $File::Find::dir
     my $pathname;		# complete path $File::Find::name
+    my $path;			# path formed from file entries found in a dir
+    my $basenoext;		# basename of with w/o .ext
     my $entry;			# entry read from an open directory
     my $dev;			# device numnber
     my $ino;			# inode number
@@ -622,59 +654,661 @@ sub wanted($)
 	    print "DEBUG: in $pathname ignoring name of: $entry\n" if $opt_v > 5;
 	    next;
 	}
+	$path = "$pathname/$entry";
 
 	# ignore any entry that is not a file
 	#
-	if (! -f "$pathname/$entry") {
+	if (! -f $path) {
 	    print "DEBUG: in $pathname ignoring non-file: $entry\n" if $opt_v > 5;
 	    next;
 	}
 
 	# ignore any non-readable file
 	#
-	if (! -r "$pathname/$entry") {
+	if (! -r $path) {
 	    print "DEBUG: in $pathname ignoring non-readable: $entry\n" if $opt_v > 4;
+	    next;
+	}
+
+	# ignore if we happen to find the -r readme.txt file
+	#
+	# This is to avoid duplicate processing and to ensure that
+	# readme file is processed in a special way.
+	#
+	($dev,$ino,) = stat($path);
+	if (! defined $dev || ! defined $ino) {
+	    print STDERR "$0: FATAL: stat failed for: $path: $!\n";
+	    print "DEBUG: stat error prune #15 $path\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(34) unless defined $opt_a;
+	    closedir DIR;
+	    return;
+	}
+	if (defined $readme_dev && $dev == $readme_dev &&
+	    defined $readme_ino && $ino == $readme_ino) {
+	    print "DEBUG: in $pathname -r readme file, will later add: $entry\n" if $opt_v > 5;
 	    next;
 	}
 
 	# save the found file
 	#
-	if (defined $found_name{"$pathname/$entry"}) {
-	    print STDERR "$0: FATAL: duplicate name found: $pathname/$entry\n";
+	if (defined $path_basename{$path}) {
+	    print STDERR "$0: FATAL: duplicate name found: $path\n";
 	    print "DEBUG: duplicate prune #14 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(33) unless defined $opt_a;
 	    closedir DIR;
 	    return;
 	}
-	$found_name{"$pathname/$entry"} = $entry;
+	$path_basename{$path} = $entry;
+
+	# save the found basename w/o .ext
+	#
+	($basenoext = $entry) =~ s/\.[^.]*$//;
+	$path_basenoext{$path} = $basenoext;
 
 	# save the found device/inum for duplicate detection
 	#
-	($dev,$ino,) = stat("$pathname/$entry");
-	if (! defined $dev || ! defined $ino) {
-	    print STDERR "$0: FATAL: stat failed for: $pathname/$entry: $!\n";
-	    print "DEBUG: stat error prune #15 $pathname\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(34) unless defined $opt_a;
-	    closedir DIR;
-	    return;
-	}
-	if (defined $found_devino{"$pathname/$entry"}) {
-	    print STDERR "$0: FATAL: duplicate dev.ino found: $pathname/$entry\n";
-	    print "DEBUG: duplicate prune #16 $pathname\n" if $opt_v > 1;
+	if (defined $devino_path{"$dev/$ino"}) {
+	    print STDERR "$0: FATAL: duplicate dev.ino found: dev: $dev inum: $ino\n";
+	    print "DEBUG: duplicate prune #16 $path same file as $devino_path{"$dev/$ino"}\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(35) unless defined $opt_a;
 	    closedir DIR;
 	    return;
 	}
-	$found_devino{"$pathname/$entry"} = "$dev/$ino";
+	$devino_path{"$dev/$ino"} = $path;
+
+	# track which paths have the same basename w/o .ext
+	#
+	if (defined $basenoext_pathset{$basenoext}) {
+	    # dup basename w/o .ext found, mark both paths
+	    $need_plus{$path} = 1;
+	    $need_plus{@{$basenoext_pathset{$basenoext}}[0]} = 1;
+	    # save this base w/o .ext in the pathset
+	    push(@{$basenoext_pathset{$basenoext}}, $path);
+	} else {
+	    # not a dup (yet)
+	    $need_plus{$path} = 0;
+	    # save this base w/o .ext in the pathset
+	    push(@{$basenoext_pathset{$basenoext}}, $path);
+	}
     }
 
     # cleanup
     #
     closedir DIR;
     return;
+}
+
+
+# get_timestamp - determine the timestamp of EXIF or file dates
+#
+# given:
+#	\@pathset	array of paths to to check
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub get_timestamp($)
+{
+    XXX - code
+}
+
+
+# exif_date - determine a file date string using EXIF data
+#
+# given:
+#	$filename	image filename to process
+#
+# uses these globals:
+#
+#	$exiftool	Image::ExifTool object
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub exif_date($)
+{
+    my ($filename) = @_;	# get args
+    my $info;		# exiftool extracted EXIF information
+    my $tag;		# EXIF tag name
+    my $timestamp;	# seconds since the epoch of early tstamp or -1
+
+    # firewall - image file must be readable
+    #
+    if (! -e $filename) {
+	return (50, "cannot open");	# exit(50)
+    }
+    if (! -r $filename) {
+	return (51, "cannot read");	# exit(51)
+    }
+
+    # extract meta information from an image
+    #
+    $info = $exiftool->ImageInfo($filename, @tag_list);
+    if (! defined $info || defined $$info{Error}) {
+	# failure to get a EXIF data
+	if (defined $$info{Error}) {
+	    return (52, "EXIF data error: $$info{Error}");	# exit(52)
+        } else {
+	    return (53, "no EXIF data");	# exit(53)
+	}
+    }
+
+    # look at each EXIF tag value we found
+    #
+    # We are looking for the earliest timestamp that is not before
+    # $mintime.  A < 0 timestamp means nothing found so far.
+    #
+    $timestamp = -1;	# no timestamp yet
+    foreach $tag (@tag_list) {
+
+	# ignore if no EXIF value or non-numeric
+	#
+	if (! defined $$info{$tag}) {
+	    print "DEBUG: ignoring undef EXIF tag value: $tag\n" if $opt_v > 5;
+	} elsif ($$info{$tag} !~ /^\d+$/) {
+	    print "DEBUG: ignoring non-numeric tag: $tag: ",
+	    	"$$info{$tag}\n" if $opt_v > 5;
+	} elsif ($$info{$tag} <= $mintime) {
+	    print "DEBUG: ignoring pre-mintime: $tag: ",
+	    	  "$$info{$tag} <= $mintime\n" if $opt_v > 5;
+	} elsif ($timestamp > 0 && $$info{$tag} == $timestamp) {
+	    print "DEBUG: ignoring timestamp tag: $tag: ",
+	    	  "$$info{$tag} same value\n"
+		  if $opt_v > 5;
+	} elsif ($timestamp > 0 && $$info{$tag} > $timestamp) {
+	    print "DEBUG: ignoring timestamp tag: $tag: ",
+	    	  "$$info{$tag} that is not earlist > $timestamp\n"
+		  if $opt_v > 5;
+	} else {
+	    print "DEBUG: found useful numeric timestamp tag: $tag ",
+	    	  "$$info{$tag}\n" if $opt_v > 5;
+	    $timestamp = $$info{$tag};
+        }
+    }
+    if ($timestamp < 0) {
+	return (54, "no timestamp in EXIF data");	# exit(54)
+    }
+
+    # Avoid very old EXIF timestamps
+    #
+    if ($timestamp < $mintime) {
+	return (55, "timestamp: $timestamp < min: $mintime");	# exit(55)
+    }
+
+    # return the EXIF timestamp
+    #
+    return (0, $timestamp);
+}
+
+
+# file_date - return the earlist reasonable create/modify timestamp
+#
+# given:
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub file_date($)
+{
+    my ($filename) = @_;	# get arg
+    my $mtime;			# modify timestamp
+    my $ctime;			# create timestamp
+
+    # firewall - file must exist
+    #
+    if (! -e $filename) {
+	return (60, "cannot open");	# exit(60)
+    }
+
+    # stat the file
+    #
+    (undef, undef, undef, undef, undef, undef, undef, undef,
+     undef, $mtime, $ctime) = stat($filename);
+
+    # first try the create timestamp
+    #
+    if (defined $ctime && $ctime >= $mintime) {
+	# use create time
+	print "DEBUG: using: $filename: create timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $ctime);
+
+    # next try the modify timestamp
+    #
+    } elsif (defined $mtime && $mtime >= $mintime) {
+	# use modify time
+	print "DEBUG: using: $filename: modify timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $mtime);
+    }
+
+    # we cannot find a useful file timestamp
+    #
+    print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
+    return (61, "file is too old");	# exit(61)
+}
+
+
+# text_date - find a date: timestamp in the first few lines of a txt file
+#
+# We look in the first $datelines of a text file for a string of
+# the form:
+#
+#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
+#	xx    xxxxx 		xxxxxxxx    xxx... <== x's mark optional fields
+#
+# NOTE: SS (seconds of minute) default to 0 if it is not given.
+#
+# or of these forms:
+#
+#	# date: YYYY/MM/dd hh:mm:ss
+#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
+#	# date: YYYY-MM-dd hh:mm:ss
+#	xx    x            xxxxxxxxxxxx            <== x's mark optional fields
+#	# date: YYYY.MM.dd hh:mm:ss
+#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
+#
+# NOTE: hh:mm:ss default to 12:00:00 if it is not given
+#
+# The match is case insensitve.  The leading #(whitespace) is optional.
+# The Xyz (day of week) is optional.  The ABC timezone field is optional.
+#
+# given:
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub text_date($)
+{
+    my ($filename) = @_;	# get arg
+    my $line;			# line from the text file
+    my $i;
+
+    # firewall - image file must be readable
+    #
+    if (! -e $filename) {
+	return (70, "cannot open");	# exit(70)
+    }
+    if (! -r $filename) {
+	return (71, "cannot read");	# exit(71)
+    }
+
+    # open the text file
+    #
+    print "DEBUG: looking for date in text file: $filename\n" if $opt_v > 4;
+    if (! open TEXT, '<', $filename) {
+	return (72, "cannot open: $!");	# exit(72)
+    }
+
+    # read the 1st $datelines of a file looking for a timestamp
+    #
+    for ($i=0; $i < $datelines; ++$i) {
+
+	# read a line
+	#
+	if (! defined($line = <TEXT>)) {
+	    return (73, "EOF or text read error");	# exit(73)
+	}
+	chomp $line;
+	print "DEBUG: read text line $i in $filename: $line\n" if $opt_v > 6;
+
+	# look for a date string of the form:
+	#
+	#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
+	#	xx    xxxxx 		xxxxxxxx    xxx... <== optional fields
+	#
+	# NOTE: SS (seconds of minute) default to 0 if it is not given.
+	#
+	if ($line =~  m{
+		      ^
+		      (\#\s*)?	# 1: optional # space (ignored)
+		      date(:)?	# 2: date with optional : (ignored)
+		      (\s*\S+)?	# 3: day of week (ignored)
+		      \s+
+		      (\S+)	# 4: short name of month
+		      \s+
+		      (\d+)	# 5: day of month
+		      \s+
+		      (\d+)	# 6: hour of day
+		      :
+		      (\d+)	# 7: minute of hour
+		      (:\d+)?	# 8: optional :seconds (defaults to "00")
+		      (\s+\S+)?	# 9: optional timezone (ignored)
+		      \s+
+		      (\d{4})	# 10: 4 digit year
+		      }ix) {
+
+	    my $sec = $8;	# seconds or 0 if not given
+	    my $min = $7;	# minite of hour
+	    my $hour = $6;	# hour of day
+	    my $mday = $5;	# day of month
+	    my $monname = $4;	# short name of month
+	    my $mon = -1;	# month of year [0..11]
+	    my $year = $10;	# year
+	    my $timestamp;	# date string coverted into a timestamp
+	    print "DEBUG: #1 parsed $year-$monname-$mday $hour:$min",
+	    	  (defined $sec ? $sec : ""), "\n" if $opt_v > 6;
+
+	    # convert short name of month to month number [0..11]
+	    #
+	    print "DEBUG: line $i, found possible date string in $filename: ",
+	    	   "$line\n" if $opt_v > 5;
+	    foreach ( keys %mname ) {
+		$mon = $mname{$_} if $monname =~ /^$_$/i;
+	    }
+	    if ($mon < 0) {
+		print "DEBUG: ignoring bad month name $monname on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+
+	    # fix seconds, the above regexp prepends a : or undefs it
+	    #
+	    if (defined $sec) {
+		$sec =~ s/\D//g;
+	    } else {
+		$sec = 0;
+	    }
+
+	    # convert fields to a timestamp
+	    #
+	    printf("DEBUG: #1 will parse date: " .
+		   "%04d-%02d-%02d %02d:%02d:%02d\n",
+	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
+	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
+	    if (! defined $timestamp) {
+		print "DEBUG: #1 ignoring malformed date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    if ($timestamp < $mintime) {
+		print "DEBUG: #1 ignoring very early date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    print "DEBUG: #1 $filename timestamp: $timestamp\n" if $opt_v > 2;
+
+	    # return the timestamp according to this date line we read
+	    #
+	    return (0, $timestamp);
+
+	# look for a date string of the form:
+	#
+	#	# date: YYYY/MM/dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	#	# date: YYYY-MM-dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	#	# date: YYYY.MM.dd hh:mm:ss
+	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#
+	# NOTE: hh:mm:ss default to 12:00:00 if it is not given
+	#
+	} elsif ($line =~  m{
+		      ^
+		      (\#\s*)?	# 1: optional # space (ignored)
+		      date(:)?	# 2: date with optional : (ignored)
+		      \s+
+		      (\d{4})	# 3: 4 digit year
+		      [/.-]
+		      (\d{2})	# 4: 2 digit month of year [01-12]
+		      [/.-]
+		      (\d{2})	# 5: 2  2 digit day of month [01-31]
+		      (\s+\d{2}:\d{2}:\d{2})?	# 6: optional hh:mm:ss timestamp
+		      }ix) {
+
+	    my $sec;		# seconds of minute
+	    my $min;		# minite of hour
+	    my $hour;		# hour of day
+	    my $timeofday = $6;	# optional hh:mm:ss timestamp
+	    my $mday = $5;	# day of month
+	    my $mon = $4;	# month of year [01-12]
+	    my $year = $3;	# year
+	    my $timestamp;	# date string coverted into a timestamp
+	    print "DEBUG: #2 parsed $year-$mon-$mday",
+	    	  (defined $timeofday ? $timeofday : ""), "\n" if $opt_v > 6;
+
+	    # parse timeofday, if given
+	    #
+	    if (defined $timeofday &&
+	    	$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
+		$hour = $1;
+		$min = $2;
+		$sec = $3;
+	    } else {
+		# no time of day, use noon
+		$hour = 12;
+		$min = 0;
+		$sec = 0;
+	    }
+
+	    # convert fields to a timestamp
+	    #
+	    printf("DEBUG: #2 will parse date: " .
+	    	   "%04d-%02d-%02d %02d:%02d:%02d\n",
+	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
+	    $timestamp = timegm_nocheck($sec, $min, $hour,
+	    				$mday, $mon-1, $year);
+	    if (! defined $timestamp) {
+		print "DEBUG: #2 ignoring malformed date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    if ($timestamp < $mintime) {
+		print "DEBUG: #2 ignoring very early date on line $i ",
+		    " in $filename\n" if $opt_v > 4;
+	    	next;	# bad month name
+	    }
+	    print "DEBUG: #2 $filename timestamp: $timestamp\n" if $opt_v > 2;
+
+	    # return the timestamp according to this date line we read
+	    #
+	    return (0, $timestamp);
+	}
+    }
+
+    # no date stamp found
+    #
+    return (74, "no date stamp found in initial lines");	# exit(74)
+}
+
+
+# form_dir - ensure that a directory exists and is writable
+#
+# given:
+#	$dirname	directory to name
+#
+# returns:
+#	($code, $errmsg)
+#	$code:	0 ==> error, >0 ==> error
+#	$errmsg: error code or undef ==> OK
+#
+sub form_dir($)
+{
+    my ($dir_name) = @_;	# get args
+
+    # setup the destination directory if needed
+    #
+    if (-e $dir_name && ! -d $dir_name) {
+	print STDERR "$0: is a non-directory: $dir_name\n";
+	return (80, "is a non-directory");	# exit(80)
+    }
+    if (! -d $dir_name) {
+	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
+        if (! mkdir($dir_name, 0775)) {
+	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
+	    return (81, "cannot mkdir");	# exit(81)
+	} elsif (! -w $dir_name) {
+	    print STDERR "$0: directory is not writable: $dir_name\n";
+	    return (82, "directory is not writable");	# exit(82)
+	}
+    }
+    # all is OK
+    return (0, undef);
+}
+
+
+# roll_setup - setup and/or increment the .exifroll EXIF roll number file
+#
+# uses these globals:
+#
+#	$rollfile	see -e in program usage at top
+#	$rollnum	EXIF roll number
+#
+sub roll_setup()
+{
+    # if -n rollnum was given, force that value to be used
+    # and do not read or update the ~/.exifroll file
+    #
+    if (defined $opt_n) {
+
+	# firewall - roll number must be 3 digits
+	#
+	if ($opt_n !~ /^\d{3}$/) {
+	    print STDERR "$0: roll number must be 3 digits\n";
+	    exit(90);
+	}
+	$rollnum = $opt_n;
+	return;
+    }
+
+    # process an existing ~/.exifroll file
+    #
+    $rollnum = "000";	# default initial roll number
+    if (-e $rollfile) {
+
+	# firewall - must be readable
+	#
+	if (! -r $rollfile) {
+	    print STDERR "$0: cannot read exifroll file: $rollfile\n";
+	    exit(91);
+	} elsif (! -w $rollfile) {
+	    print STDERR "$0: cannot write exifroll file: $rollfile\n";
+	    exit(92);
+	}
+
+	# open ~/.exifroll file
+	#
+	if (! open EXIFROLL, '<', $rollfile) {
+	    print STDERR "$0: cannot open for reading exifroll: ",
+	    		 "$rollfile: $!\n";
+	    exit(93);
+	}
+
+	# read only the first line
+	#
+	$rollnum = <EXIFROLL>;
+	chomp $rollnum;
+	close EXIFROLL;
+
+	# assume roll number of 000 if bad line or no line
+	#
+	if ($rollnum !~ /^\d{3}$/) {
+	    print STDERR "$0: Warning: invalid roll number in $rollfile\n";
+	    print STDERR "$0: will use roll number 000 instead\n";
+	    $rollnum = "000";
+	}
+    }
+
+    # write the next roll numner into ~/.exifroll
+    #
+    print "DEBUG: will use roll number: $rollnum\n" if $opt_v > 0;
+    if (! open EXIFROLL, '>', $rollfile) {
+	print STDERR "$0: cannot open for writing exifroll: $rollfile: $!\n";
+	exit(94);
+    }
+    if ($rollnum > 999) {
+	if (! print EXIFROLL "000\n") {
+	    print "DEBUG: nexr roll number will be 000\n" if $opt_v > 1;
+	} else {
+	    print STDERR "$0: cannot write 000 rollnum ",
+	    		 "to exifroll: $rollfile: $!\n";
+	    exit(95);
+	}
+    } else {
+	if (printf EXIFROLL "%03d\n", $rollnum+1) {
+	    print "DEBUG: next roll number will be ",
+	    	sprintf("%03d", $rollnum+1), "\n" if $opt_v > 1;
+	} else {
+	    print STDERR "$0: cannot write next rollnum ",
+	    		 "to exifroll: $rollfile: $!\n";
+	    exit(96);
+	}
+    }
+    close EXIFROLL;
+    return;
+}
+
+
+# readme_check - check the -r readme filename given
+#
+# given:
+#	$readme		# -r readme file to check
+#
+# returns:
+#	absolute path of the readme file
+#
+# NOTE: This function exits if there are any problems.
+#
+# NOTE: This function is expected to be called from main
+#	soon after arg parsing.
+#
+sub readme_check($)
+{
+    my ($readme) = @_;		# get args
+    my $exitcode;		# return code from text_date
+    my $message;		# timestamp or error message
+    my $ret;			# absolute path of readme file
+
+    # -r $readme file must be a readable file
+    #
+    if (! -e $readme) {
+	print STDERR "$0: -r $readme does not exist\n";
+	exit(100);
+    }
+    if (! -f $readme) {
+	print STDERR "$0: -r $readme is not a file\n";
+	exit(101);
+    }
+    if (! -r $readme) {
+	print STDERR "$0: -r $readme is not readable\n";
+	exit(102);
+    }
+
+    # must have a text date
+    #
+    ($exitcode, $message) = text_date($readme);
+    if ($exitcode != 0) {
+	print STDERR "$0: -r $readme does not have a date timestamp line\n";
+	print STDERR "$0: try adding '# date: yyyy-mm-dd' line to $readme\n";
+	exit(103);
+    }
+
+    # determine absolute path of readme
+    #
+    $ret = abs_path($readme);
+    if (! defined $ret) {
+	print STDERR "$0: cannot determine absolute path of $readme\n";
+	exit(104);
+    }
+
+    # prepend current directory if path is not absolute
+    #
+    return $ret;
 }
 
 
@@ -877,7 +1511,7 @@ sub wanted($)
 #	$adding_readme		0 ==> function being called by find()
 #				!= 0  ==> function being called by add_readme()
 #
-sub old_wanted($) - XXX
+sub old_wanted($)	# XXX remove when code complete
 {
     my $filename = $_;		# current filename within $File::Find::dir or
 				# absolute path of readme if $adding_readme!=0
@@ -1488,7 +2122,7 @@ sub old_wanted($) - XXX
 #	    $exiffound:	1 ==> valid EXIF time data found, 0 ==> no EXIF time
 #	    $multifound: 1 ==> 2+ files with different .exts found, 0 ==> 1
 #
-sub timestamp($)
+sub old_timestamp($) # XXX - remove when code complete
 {
     my ($filename) = @_;	# get args
     my $noext;			# filename without any extension
@@ -1624,619 +2258,4 @@ sub timestamp($)
 	}
     }
     return ($errcode, $timestamp, 0, ($count > 1));
-}
-
-
-# exif_date - determine a file date string using EXIF data
-#
-# given:
-#	$filename	image filename to process
-#
-# uses these globals:
-#
-#	$exiftool	Image::ExifTool object
-#
-# returns:
-#	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
-#	    $message:	$exitcode==0 ==> timestamp, else error message
-#
-sub exif_date($)
-{
-    my ($filename) = @_;	# get args
-    my $info;		# exiftool extracted EXIF information
-    my $tag;		# EXIF tag name
-    my $timestamp;	# seconds since the epoch of early tstamp or -1
-
-    # firewall - image file must be readable
-    #
-    if (! -e $filename) {
-	return (50, "cannot open");	# exit(50)
-    }
-    if (! -r $filename) {
-	return (51, "cannot read");	# exit(51)
-    }
-
-    # extract meta information from an image
-    #
-    $info = $exiftool->ImageInfo($filename, @tag_list);
-    if (! defined $info || defined $$info{Error}) {
-	# failure to get a EXIF data
-	if (defined $$info{Error}) {
-	    return (52, "EXIF data error: $$info{Error}");	# exit(52)
-        } else {
-	    return (53, "no EXIF data");	# exit(53)
-	}
-    }
-
-    # look at each EXIF tag value we found
-    #
-    # We are looking for the earliest timestamp that is not before
-    # $mintime.  A < 0 timestamp means nothing found so far.
-    #
-    $timestamp = -1;	# no timestamp yet
-    foreach $tag (@tag_list) {
-
-	# ignore if no EXIF value or non-numeric
-	#
-	if (! defined $$info{$tag}) {
-	    print "DEBUG: ignoring undef EXIF tag value: $tag\n" if $opt_v > 5;
-	} elsif ($$info{$tag} !~ /^\d+$/) {
-	    print "DEBUG: ignoring non-numeric tag: $tag: ",
-	    	"$$info{$tag}\n" if $opt_v > 5;
-	} elsif ($$info{$tag} <= $mintime) {
-	    print "DEBUG: ignoring pre-mintime: $tag: ",
-	    	  "$$info{$tag} <= $mintime\n" if $opt_v > 5;
-	} elsif ($timestamp > 0 && $$info{$tag} == $timestamp) {
-	    print "DEBUG: ignoring timestamp tag: $tag: ",
-	    	  "$$info{$tag} same value\n"
-		  if $opt_v > 5;
-	} elsif ($timestamp > 0 && $$info{$tag} > $timestamp) {
-	    print "DEBUG: ignoring timestamp tag: $tag: ",
-	    	  "$$info{$tag} that is not earlist > $timestamp\n"
-		  if $opt_v > 5;
-	} else {
-	    print "DEBUG: found useful numeric timestamp tag: $tag ",
-	    	  "$$info{$tag}\n" if $opt_v > 5;
-	    $timestamp = $$info{$tag};
-        }
-    }
-    if ($timestamp < 0) {
-	return (54, "no timestamp in EXIF data");	# exit(54)
-    }
-
-    # Avoid very old EXIF timestamps
-    #
-    if ($timestamp < $mintime) {
-	return (55, "timestamp: $timestamp < min: $mintime");	# exit(55)
-    }
-
-    # return the EXIF timestamp
-    #
-    return (0, $timestamp);
-}
-
-
-# file_date - return the earlist reasonable create/modify timestamp
-#
-# given:
-#	$filename	image filename to process
-#
-# returns:
-#	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
-#	    $message:	$exitcode==0 ==> timestamp, else error message
-#
-sub file_date($)
-{
-    my ($filename) = @_;	# get arg
-    my $mtime;			# modify timestamp
-    my $ctime;			# create timestamp
-
-    # firewall - file must exist
-    #
-    if (! -e $filename) {
-	return (60, "cannot open");	# exit(60)
-    }
-
-    # stat the file
-    #
-    (undef, undef, undef, undef, undef, undef, undef, undef,
-     undef, $mtime, $ctime) = stat($filename);
-
-    # first try the create timestamp
-    #
-    if (defined $ctime && $ctime >= $mintime) {
-	# use create time
-	print "DEBUG: using: $filename: create timestamp: $ctime\n"
-	    if $opt_v > 4;
-	return (0, $ctime);
-
-    # next try the modify timestamp
-    #
-    } elsif (defined $mtime && $mtime >= $mintime) {
-	# use modify time
-	print "DEBUG: using: $filename: modify timestamp: $ctime\n"
-	    if $opt_v > 4;
-	return (0, $mtime);
-    }
-
-    # we cannot find a useful file timestamp
-    #
-    print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
-    return (61, "file is too old");	# exit(61)
-}
-
-
-# text_date - find a date: timestamp in the first few lines of a txt file
-#
-# We look in the first $datelines of a text file for a string of
-# the form:
-#
-#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-#	xx    xxxxx 		xxxxxxxx    xxx... <== x's mark optional fields
-#
-# NOTE: SS (seconds of minute) default to 0 if it is not given.
-#
-# or of these forms:
-#
-#	# date: YYYY/MM/dd hh:mm:ss
-#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
-#	# date: YYYY-MM-dd hh:mm:ss
-#	xx    x            xxxxxxxxxxxx            <== x's mark optional fields
-#	# date: YYYY.MM.dd hh:mm:ss
-#	xx    x           xxxxxxxxxxxx            <== x's mark optional fields
-#
-# NOTE: hh:mm:ss default to 12:00:00 if it is not given
-#
-# The match is case insensitve.  The leading #(whitespace) is optional.
-# The Xyz (day of week) is optional.  The ABC timezone field is optional.
-#
-# given:
-#	$filename	image filename to process
-#
-# returns:
-#	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
-#	    $message:	$exitcode==0 ==> timestamp, else error message
-#
-sub text_date($)
-{
-    my ($filename) = @_;	# get arg
-    my $line;			# line from the text file
-    my $i;
-
-    # firewall - image file must be readable
-    #
-    if (! -e $filename) {
-	return (70, "cannot open");	# exit(70)
-    }
-    if (! -r $filename) {
-	return (71, "cannot read");	# exit(71)
-    }
-
-    # open the text file
-    #
-    print "DEBUG: looking for date in text file: $filename\n" if $opt_v > 4;
-    if (! open TEXT, '<', $filename) {
-	return (72, "cannot open: $!");	# exit(72)
-    }
-
-    # read the 1st $datelines of a file looking for a timestamp
-    #
-    for ($i=0; $i < $datelines; ++$i) {
-
-	# read a line
-	#
-	if (! defined($line = <TEXT>)) {
-	    return (73, "EOF or text read error");	# exit(73)
-	}
-	chomp $line;
-	print "DEBUG: read text line $i in $filename: $line\n" if $opt_v > 6;
-
-	# look for a date string of the form:
-	#
-	#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-	#	xx    xxxxx 		xxxxxxxx    xxx... <== optional fields
-	#
-	# NOTE: SS (seconds of minute) default to 0 if it is not given.
-	#
-	if ($line =~  m{
-		      ^
-		      (\#\s*)?	# 1: optional # space (ignored)
-		      date(:)?	# 2: date with optional : (ignored)
-		      (\s*\S+)?	# 3: day of week (ignored)
-		      \s+
-		      (\S+)	# 4: short name of month
-		      \s+
-		      (\d+)	# 5: day of month
-		      \s+
-		      (\d+)	# 6: hour of day
-		      :
-		      (\d+)	# 7: minute of hour
-		      (:\d+)?	# 8: optional :seconds (defaults to "00")
-		      (\s+\S+)?	# 9: optional timezone (ignored)
-		      \s+
-		      (\d{4})	# 10: 4 digit year
-		      }ix) {
-
-	    my $sec = $8;	# seconds or 0 if not given
-	    my $min = $7;	# minite of hour
-	    my $hour = $6;	# hour of day
-	    my $mday = $5;	# day of month
-	    my $monname = $4;	# short name of month
-	    my $mon = -1;	# month of year [0..11]
-	    my $year = $10;	# year
-	    my $timestamp;	# date string coverted into a timestamp
-	    print "DEBUG: #1 parsed $year-$monname-$mday $hour:$min",
-	    	  (defined $sec ? $sec : ""), "\n" if $opt_v > 6;
-
-	    # convert short name of month to month number [0..11]
-	    #
-	    print "DEBUG: line $i, found possible date string in $filename: ",
-	    	   "$line\n" if $opt_v > 5;
-	    foreach ( keys %mname ) {
-		$mon = $mname{$_} if $monname =~ /^$_$/i;
-	    }
-	    if ($mon < 0) {
-		print "DEBUG: ignoring bad month name $monname on line $i ",
-		    " in $filename\n" if $opt_v > 4;
-	    	next;	# bad month name
-	    }
-
-	    # fix seconds, the above regexp prepends a : or undefs it
-	    #
-	    if (defined $sec) {
-		$sec =~ s/\D//g;
-	    } else {
-		$sec = 0;
-	    }
-
-	    # convert fields to a timestamp
-	    #
-	    printf("DEBUG: #1 will parse date: " .
-		   "%04d-%02d-%02d %02d:%02d:%02d\n",
-	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
-	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
-	    if (! defined $timestamp) {
-		print "DEBUG: #1 ignoring malformed date on line $i ",
-		    " in $filename\n" if $opt_v > 4;
-	    	next;	# bad month name
-	    }
-	    if ($timestamp < $mintime) {
-		print "DEBUG: #1 ignoring very early date on line $i ",
-		    " in $filename\n" if $opt_v > 4;
-	    	next;	# bad month name
-	    }
-	    print "DEBUG: #1 $filename timestamp: $timestamp\n" if $opt_v > 2;
-
-	    # return the timestamp according to this date line we read
-	    #
-	    return (0, $timestamp);
-
-	# look for a date string of the form:
-	#
-	#	# date: YYYY/MM/dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
-	#
-	#	# date: YYYY-MM-dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
-	#
-	#	# date: YYYY.MM.dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
-	#
-	# NOTE: hh:mm:ss default to 12:00:00 if it is not given
-	#
-	} elsif ($line =~  m{
-		      ^
-		      (\#\s*)?	# 1: optional # space (ignored)
-		      date(:)?	# 2: date with optional : (ignored)
-		      \s+
-		      (\d{4})	# 3: 4 digit year
-		      [/.-]
-		      (\d{2})	# 4: 2 digit month of year [01-12]
-		      [/.-]
-		      (\d{2})	# 5: 2  2 digit day of month [01-31]
-		      (\s+\d{2}:\d{2}:\d{2})?	# 6: optional hh:mm:ss timestamp
-		      }ix) {
-
-	    my $sec;		# seconds of minute
-	    my $min;		# minite of hour
-	    my $hour;		# hour of day
-	    my $timeofday = $6;	# optional hh:mm:ss timestamp
-	    my $mday = $5;	# day of month
-	    my $mon = $4;	# month of year [01-12]
-	    my $year = $3;	# year
-	    my $timestamp;	# date string coverted into a timestamp
-	    print "DEBUG: #2 parsed $year-$mon-$mday",
-	    	  (defined $timeofday ? $timeofday : ""), "\n" if $opt_v > 6;
-
-	    # parse timeofday, if given
-	    #
-	    if (defined $timeofday &&
-	    	$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
-		$hour = $1;
-		$min = $2;
-		$sec = $3;
-	    } else {
-		# no time of day, use noon
-		$hour = 12;
-		$min = 0;
-		$sec = 0;
-	    }
-
-	    # convert fields to a timestamp
-	    #
-	    printf("DEBUG: #2 will parse date: " .
-	    	   "%04d-%02d-%02d %02d:%02d:%02d\n",
-	    	   $year, $mon, $mday, $hour, $min, $sec) if $opt_v > 6;
-	    $timestamp = timegm_nocheck($sec, $min, $hour,
-	    				$mday, $mon-1, $year);
-	    if (! defined $timestamp) {
-		print "DEBUG: #2 ignoring malformed date on line $i ",
-		    " in $filename\n" if $opt_v > 4;
-	    	next;	# bad month name
-	    }
-	    if ($timestamp < $mintime) {
-		print "DEBUG: #2 ignoring very early date on line $i ",
-		    " in $filename\n" if $opt_v > 4;
-	    	next;	# bad month name
-	    }
-	    print "DEBUG: #2 $filename timestamp: $timestamp\n" if $opt_v > 2;
-
-	    # return the timestamp according to this date line we read
-	    #
-	    return (0, $timestamp);
-	}
-    }
-
-    # no date stamp found
-    #
-    return (74, "no date stamp found in initial lines");	# exit(74)
-}
-
-
-# form_dir - ensure that a directory exists and is writable
-#
-# given:
-#	$dirname	directory to name
-#
-# returns:
-#	($code, $errmsg)
-#	$code:	0 ==> error, >0 ==> error
-#	$errmsg: error code or undef ==> OK
-#
-sub form_dir($)
-{
-    my ($dir_name) = @_;	# get args
-
-    # setup the destination directory if needed
-    #
-    if (-e $dir_name && ! -d $dir_name) {
-	print STDERR "$0: is a non-directory: $dir_name\n";
-	return (80, "is a non-directory");	# exit(80)
-    }
-    if (! -d $dir_name) {
-	print "DEBUG: will try to mkdir: $dir_name\n" if $opt_v > 1;
-        if (! mkdir($dir_name, 0775)) {
-	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
-	    return (81, "cannot mkdir");	# exit(81)
-	} elsif (! -w $dir_name) {
-	    print STDERR "$0: directory is not writable: $dir_name\n";
-	    return (82, "directory is not writable");	# exit(82)
-	}
-    }
-    # all is OK
-    return (0, undef);
-}
-
-
-# roll_setup - setup and/or increment the .exifroll EXIF roll number file
-#
-# uses these globals:
-#
-#	$rollfile	see -e in program usage at top
-#	$rollnum	EXIF roll number
-#
-sub roll_setup()
-{
-    # if -n rollnum was given, force that value to be used
-    # and do not read or update the ~/.exifroll file
-    #
-    if (defined $opt_n) {
-
-	# firewall - roll number must be 3 digits
-	#
-	if ($opt_n !~ /^\d{3}$/) {
-	    print STDERR "$0: roll number must be 3 digits\n";
-	    exit(90);
-	}
-	$rollnum = $opt_n;
-	return;
-    }
-
-    # process an existing ~/.exifroll file
-    #
-    $rollnum = "000";	# default initial roll number
-    if (-e $rollfile) {
-
-	# firewall - must be readable
-	#
-	if (! -r $rollfile) {
-	    print STDERR "$0: cannot read exifroll file: $rollfile\n";
-	    exit(91);
-	} elsif (! -w $rollfile) {
-	    print STDERR "$0: cannot write exifroll file: $rollfile\n";
-	    exit(92);
-	}
-
-	# open ~/.exifroll file
-	#
-	if (! open EXIFROLL, '<', $rollfile) {
-	    print STDERR "$0: cannot open for reading exifroll: ",
-	    		 "$rollfile: $!\n";
-	    exit(93);
-	}
-
-	# read only the first line
-	#
-	$rollnum = <EXIFROLL>;
-	chomp $rollnum;
-	close EXIFROLL;
-
-	# assume roll number of 000 if bad line or no line
-	#
-	if ($rollnum !~ /^\d{3}$/) {
-	    print STDERR "$0: Warning: invalid roll number in $rollfile\n";
-	    print STDERR "$0: will use roll number 000 instead\n";
-	    $rollnum = "000";
-	}
-    }
-
-    # write the next roll numner into ~/.exifroll
-    #
-    print "DEBUG: will use roll number: $rollnum\n" if $opt_v > 0;
-    if (! open EXIFROLL, '>', $rollfile) {
-	print STDERR "$0: cannot open for writing exifroll: $rollfile: $!\n";
-	exit(94);
-    }
-    if ($rollnum > 999) {
-	if (! print EXIFROLL "000\n") {
-	    print "DEBUG: nexr roll number will be 000\n" if $opt_v > 1;
-	} else {
-	    print STDERR "$0: cannot write 000 rollnum ",
-	    		 "to exifroll: $rollfile: $!\n";
-	    exit(95);
-	}
-    } else {
-	if (printf EXIFROLL "%03d\n", $rollnum+1) {
-	    print "DEBUG: next roll number will be ",
-	    	sprintf("%03d", $rollnum+1), "\n" if $opt_v > 1;
-	} else {
-	    print STDERR "$0: cannot write next rollnum ",
-	    		 "to exifroll: $rollfile: $!\n";
-	    exit(96);
-	}
-    }
-    close EXIFROLL;
-    return;
-}
-
-
-# readme_check - check the -r readme filename given
-#
-# given:
-#	$readme		# -r readme file to check
-#
-# returns:
-#	absolute path of the readme file
-#
-# NOTE: This function exits if there are any problems.
-#
-# NOTE: This function is expected to be called from main
-#	soon after arg parsing.
-#
-sub readme_check($)
-{
-    my ($readme) = @_;		# get args
-    my $exitcode;		# return code from text_date
-    my $message;		# timestamp or error message
-    my $ret;			# absolute path of readme file
-
-    # -r $readme file must be a readable file
-    #
-    if (! -e $readme) {
-	print STDERR "$0: -r $readme does not exist\n";
-	exit(100);
-    }
-    if (! -f $readme) {
-	print STDERR "$0: -r $readme is not a file\n";
-	exit(101);
-    }
-    if (! -r $readme) {
-	print STDERR "$0: -r $readme is not readable\n";
-	exit(102);
-    }
-
-    # must have a text date
-    #
-    ($exitcode, $message) = text_date($readme);
-    if ($exitcode != 0) {
-	print STDERR "$0: -r $readme does not have a date timestamp line\n";
-	print STDERR "$0: try adding '# date: yyyy-mm-dd' line to $readme\n";
-	exit(103);
-    }
-
-    # determine absolute path of readme
-    #
-    $ret = abs_path($readme);
-    if (! defined $ret) {
-	print STDERR "$0: cannot determine absolute path of $readme\n";
-	exit(104);
-    }
-
-    # prepend current directory if path is not absolute
-    #
-    return $ret;
-}
-
-
-# add_readme - add the -r readme as if it was srcdir/readme.txt
-#
-# given:
-#	$readme		# -r readme file to check
-#
-# NOTE: It is assumed that readme_check() was previouslty called to
-#	pre-verify the $readme file.  Yes, something could alter the file
-#	between the read_check() call and this function call.
-#
-sub add_readme($)
-{
-    my ($readme) = @_;		# get args
-
-    # we set adding_readme to let wanted know find() is not calling it
-    #
-    $adding_readme = 1;
-
-    # call wanted with readme
-    #
-    wanted($readme);
-
-    # return to normal wanted calls
-    #
-    $adding_readme = 0;
-}
-
-
-# hash_dup_count - number of duplicate values found in a hash
-#
-# given:
-#	\%hash
-#
-# returns:
-#	0 ==> no duplicate values found in hash,
-#	>0 ==> number of duplicates found
-#
-sub hash_dup_count($)
-{
-    my ($hash) = $_;	# get arg
-    my %invert;		# hash inverted
-    my $key;		# a hash key
-    my $value;		# a hash value
-    my $dup_count = 0;	# number of duplicate values found
-
-    # scan all hash values
-    #
-    while (($key,$value) = each($$hash)) {
-        if (defined $invert{$value}) {
-	    print "DEBUG: hash_dup_count: duplicate values for $key and $invert{$value}\n" if $opt_v > 4;
-	    ++$count;
-	} else {
-	    $invert{$value} = $key;
-	}
-    }
-
-    # return duplicate cound
-    #
-    return $count;
 }
