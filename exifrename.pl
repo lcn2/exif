@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.2 $
-# @(#) $Id: exifrename.pl,v 2.2 2006/07/13 19:43:37 chongo Exp chongo $
+# @(#) $Revision: 2.3 $
+# @(#) $Id: exifrename.pl,v 2.3 2006/07/14 03:00:57 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.2 $, 10;
+my $VERSION = substr q$Revision: 2.3 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -84,14 +84,7 @@ my @tag_list = qw( ModifyDate DateTimeOriginal CreateDate );
 # contain EXIF data
 #
 my @exif_ext = qw(
-    cr2 CR2
-    raw RAW
-    tif TIF tiff TIFF
-    jpg JPG jpeg JPEG
-    png PNG
-    gif GIF
-    psd PSD
-    eps EPS
+    cr2 raw tif tiff jpg jpeg png gif psd eps
 );
 
 # hash of potential files found walking $srcdir giving basename
@@ -99,6 +92,7 @@ my @exif_ext = qw(
 #	$path_basename{$path} == basename of $path
 #	$path_basenoext{$path} == basename of $path w/o .ext
 #	$devino_path{"file_dev/file_inum"} == path
+#	$path_filetime{$path} == file non-EXIF timestamp
 #	$need_plus{$path} == 0 ==> use -, 1 ==> multiple found, use +
 #	$basenoext_pathset{$basenoext} == array of paths with dup base w/o .ext
 #	$pathset_timestamp{$basenoext} == timestamp for this pathset
@@ -106,6 +100,7 @@ my @exif_ext = qw(
 my %path_basename;
 my %path_basenoext;
 my %devino_path;
+my %path_filetime;
 my %need_plus;
 my %basenoext_pathset;
 my %pathset_timestamp;
@@ -164,27 +159,31 @@ my %optctl = (
 
 # function prototypes
 #
+sub parse_args();
 sub wanted();
 sub dir_setup();
 sub get_timestamp($);
 sub exif_date($);
-sub file_date($);
 sub text_date($);
 sub form_dir($);
 sub roll_setup();
 sub readme_check($);
 
+sub old_file_date($);	# XXX - remove when code complete
 sub old_timestamp($);	# XXX - remove when code complete
 sub old_wanted();	# XXX - remove when code complete
 
 
 # setup
 #
-MAIN: 
+MAIN:
 {
     my %find_opt;	# File::Find directory tree walk options
     my %exifoptions;	# Image::ExifTool options
-    my $i;
+    my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
+    my $message;	# $exitcode==0 ==> timestamp, else error message
+    my $basename_noext;	# pathset basename without .extension
+    my $err;		# >0 ==> fatal error number, 0 ==> OK
 
     # setup
     #
@@ -199,6 +198,90 @@ MAIN:
 
     # parse args
     #
+    parse_args();
+
+    # setup to walk the srcdir
+    #
+    $find_opt{wanted} = \&wanted; # call this on each non-pruned node
+    $find_opt{bydepth} = 0;	# walk from top down, not from bottom up
+    $find_opt{follow} = 0;	# do not follow symlinks
+    $find_opt{no_chdir} = 0;	# OK to chdir as we walk the tree
+    $find_opt{untaint} = 1;	# untaint dirs we chdir to
+    $find_opt{untaint_pattern} = $untaint; # untaint pattern
+    $find_opt{untaint_skip} = 1; # we will skip any dir that is tainted
+
+    # untaint $srcdir, $destdir, and $rollfile
+    #
+    if ($srcdir =~ /$untaint/o) {
+    	$srcdir = $1;
+    } else {
+	print STDERR "$0: FATAL: bogus chars in srcdir\n";
+	exit(9);
+    }
+    if ($destdir =~ /$untaint/o) {
+    	$destdir = $1;
+    } else {
+	print STDERR "$0: FATAL: bogus chars in destdir\n";
+	exit(10);
+    }
+    if ($rollfile =~ /$untaint/o) {
+    	$rollfile = $1;
+    } else {
+	print STDERR "$0: FATAL: bogus chars in -e filename\n";
+	exit(11);
+    }
+
+    # initialize roll serial number $rollnum
+    #
+    roll_setup();
+
+    # setup ExifTool options
+    #
+    $exifoptions{Binary} = 0;		# no timestamp is a binary field
+    $exifoptions{PrintConv} = 1;	# we will need to convert timestamps
+    $exifoptions{Unknown} = 0;		# ignore unknown fields
+    $exifoptions{DateFormat} = '%s';	# timestamps as seconds since the Epoch
+    $exifoptions{Duplicates} = 0;	# use the last timestamp if we have dups
+    $exiftool = new Image::ExifTool;
+    $exiftool->Options(%exifoptions);
+
+    # walk the srcdir collecting information about useful paths of files
+    #
+    # NOTE: See the wanted() function for details.
+    #
+    find(\%find_opt, $srcdir);
+
+    # determine the timestamp for each pathset
+    #
+    # We will try to process all files and exit after if we had any errors
+    #
+    $err = 0;
+    foreach $basename_noext ( keys %basenoext_pathset ) {
+	$pathset_timestamp{$basename_noext} =
+	  get_timestamp($basenoext_pathset{$basename_noext});
+	if (! defined $pathset_timestamp{$basename_noext}) {
+	    print STDERR "$0: FATAL: no valid EXIF timestamp and file ",
+	       "timestamp(s) too old for pathset: ",
+	       "$basename_noext\n" if $opt_v > 0;
+	    err = 12;
+	}
+    }
+    exit($err) if ($err > 0);
+
+    # setup directories
+    #
+    dir_setup();
+
+    # all done
+    #
+    exit(0);
+}
+
+
+# parse_args - parse the command line, set flags and sanity check options
+#
+sub parse_args()
+{
     if (!GetOptions(%optctl)) {
 	print STDERR "$0: invalid command line\nusage:\n\t$help\n";
 	exit(1);
@@ -291,85 +374,10 @@ MAIN:
 	    exit(8);
 	}
     }
-
-    # setup to walk the srcdir
-    #
-    $find_opt{wanted} = \&wanted; # call this on each non-pruned node
-    $find_opt{bydepth} = 0;	# walk from top down, not from bottom up
-    $find_opt{follow} = 0;	# do not follow symlinks
-    $find_opt{no_chdir} = 0;	# OK to chdir as we walk the tree
-    $find_opt{untaint} = 1;	# untaint dirs we chdir to
-    $find_opt{untaint_pattern} = $untaint; # untaint pattern
-    $find_opt{untaint_skip} = 1; # we will skip any dir that is tainted
-
-    # untaint $srcdir, $destdir, and $rollfile
-    #
-    if ($srcdir =~ /$untaint/o) {
-    	$srcdir = $1;
-    } else {
-	print STDERR "$0: FATAL: bogus chars in srcdir\n";
-	exit(9);
-    }
-    if ($destdir =~ /$untaint/o) {
-    	$destdir = $1;
-    } else {
-	print STDERR "$0: FATAL: bogus chars in destdir\n";
-	exit(10);
-    }
-    if ($rollfile =~ /$untaint/o) {
-    	$rollfile = $1;
-    } else {
-	print STDERR "$0: FATAL: bogus chars in -e filename\n";
-	exit(11);
-    }
-
-    # setup directories
-    #
-    dir_setup();
-
-    # initialize roll serial number $rollnum
-    #
-    roll_setup();
-
-    # setup ExifTool options
-    #
-    $exifoptions{Binary} = 0;		# no timestamp is a binary field
-    $exifoptions{PrintConv} = 1;	# we will need to convert timestamps
-    $exifoptions{Unknown} = 0;		# ignore unknown fields
-    $exifoptions{DateFormat} = '%s';	# timestamps as seconds since the Epoch
-    $exifoptions{Duplicates} = 0;	# use the last timestamp if we have dups
-    $exiftool = new Image::ExifTool;
-    $exiftool->Options(%exifoptions);
-
-    # walk the srcdir collecting information about useful paths of files
-    #
-    # NOTE: See the wanted() function for details.
-    #
-    find(\%find_opt, $srcdir);
-
-    # determine the timestamp for each pathset
-    #
-    foreach $i ( keys %basenoext_pathset ) {
-	my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
-	my $message;	# $exitcode==0 ==> timestamp, else error message
-
-	($exitcode, $message) = get_timestamp($basenoext_pathset{$i});
-	if ($exitcode == 0) {
-	    $pathset_timestamp{$i} = $message;
-	} else {
-	    print STDERR "$0: FATAL: file timestamp: pathset: $i: ",
-	    	  "error: $errcode: $timestamp\n";
-	    exit(12);
-	}
-    }
-
-    # all done
-    #
-    exit(0);
 }
 
 
-# dir_setup - setup and/or check on srcdir and destdir
+# dir_setup - setup and/or check on srcdir, destdir and needed destdir subdirs
 #
 # uses these globals:
 #
@@ -417,6 +425,8 @@ sub dir_setup()
     # record the device and inode number of $destdir
     #
     ($destdev, $destino,) = stat($destdir);
+
+    XXX - create directories for our pathsets
     return;
 }
 
@@ -506,8 +516,6 @@ sub dir_setup()
 # NOTE: While $File::Find will set various values under $File::Find,
 #	do not not nor need not use them.
 #
-####
-#
 sub wanted($)
 {
     my $file = $_;		# current filename within $File::Find::dir
@@ -517,22 +525,24 @@ sub wanted($)
     my $entry;			# entry read from an open directory
     my $dev;			# device numnber
     my $ino;			# inode number
+    my $mtime;			# modify timestamp
+    my $ctime;			# create timestamp
 
     # canonicalize the path by removing leading ./'s, multiple //'s
     # and trailing /'s
     #
-    print "DEBUG: in wanted arg: $file\n" if $opt_v > 3;
-    print "DEBUG: File::Find::name: $File::Find::name\n" if $opt_v > 2;
+    print "DEBUG: in wanted arg: $file\n" if $opt_v > 4;
+    print "DEBUG: File::Find::name: $File::Find::name\n" if $opt_v > 4;
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
     $pathname =~ s|(.)/+$|$1|;
-    print "DEBUG: pathname: $pathname\n" if $opt_v > 1;
+    print "DEBUG: pathname: $pathname\n" if $opt_v > 4;
 
     # prune out anything that is not a directory
     #
     if (! -d $file) {
 	# skip non-dir/non-files
-	print "DEBUG: non-directory prune #1 $pathname\n" if $opt_v > 3;
+	print "DEBUG: non-directory prune #1 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -544,13 +554,13 @@ sub wanted($)
     #
     if ($pathname eq "$srcdir/.Trashes") {
 	# skip this useless camera node
-	print "DEBUG: .Trashes prune #2 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .Trashes prune #2 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
     if ($pathname eq "$srcdir/comstate.tof") {
 	# skip this useless camera node
-	print "DEBUG: comstate.tof prune #3 $pathname\n" if $opt_v > 3;
+	print "DEBUG: comstate.tof prune #3 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -559,7 +569,7 @@ sub wanted($)
     #
     if ($file eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	print "DEBUG: .DS_Store prune #4 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .DS_Store prune #4 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -568,7 +578,7 @@ sub wanted($)
     #
     if ($file =~ /.Trashes$/) {
 	# skip OS X .DS_Store files
-	print "DEBUG: *.Trashes prune #5 $pathname\n" if $opt_v > 3;
+	print "DEBUG: *.Trashes prune #5 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -577,7 +587,7 @@ sub wanted($)
     #
     if ($file =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	print "DEBUG: desktop prune #6 $pathname\n" if $opt_v > 3;
+	print "DEBUG: desktop prune #6 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -586,7 +596,7 @@ sub wanted($)
     #
     if ($file =~ /^\.Spotlight-/i) {
 	# skip Spotlight index directories
-	print "DEBUG: Spotlight prune #7 $pathname\n" if $opt_v > 3;
+	print "DEBUG: Spotlight prune #7 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -595,17 +605,17 @@ sub wanted($)
     #
     if ($file eq ".") {
 	# ignore but do not prune directories
-	print "DEBUG: . ignore #8 $pathname\n" if $opt_v > 3;
+	print "DEBUG: . ignore #8 $pathname\n" if $opt_v > 4;
     	return;
     }
     if ($file eq "..") {
 	# ignore but do not prune directories
-	print "DEBUG: .. ignore #9 $pathname\n" if $opt_v > 3;
+	print "DEBUG: .. ignore #9 $pathname\n" if $opt_v > 4;
     	return;
     }
     if ($file eq "DCIM") {
 	# ignore but do not prune directories
-	print "DEBUG: DCIM ignore #10 $pathname\n" if $opt_v > 3;
+	print "DEBUG: DCIM ignore #10 $pathname\n" if $opt_v > 4;
     	return;
     }
 
@@ -613,7 +623,7 @@ sub wanted($)
     #
     if ($file =~ /^\../) {
 	# skip . files and dirs
-	print "DEBUG: dot-file/dir prune #11 $pathname\n" if $opt_v > 3;
+	print "DEBUG: dot-file/dir prune #11 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -637,6 +647,7 @@ sub wanted($)
 	exit(32) unless defined $opt_a;
 	return;
     }
+    print "DEBUG: scanning directory for filenames: $pathname\n" if $opt_v > 2;
 
     # collect useful filenames from this open directory
     #
@@ -651,23 +662,45 @@ sub wanted($)
 	#
 	if ($entry =~ /\.tof$/i || $entry =~ /^desktop/i ||
 	    $entry =~ /\.Trashes$/i || $entry =~ /^\./) {
-	    print "DEBUG: in $pathname ignoring name of: $entry\n" if $opt_v > 5;
+	    print "DEBUG: in $pathname ignoring name of: $entry\n"
+	      if $opt_v > 6;
 	    next;
 	}
 	$path = "$pathname/$entry";
+	print "DEBUG: found: $path\n" if $opt_v > 4;
 
 	# ignore any entry that is not a file
 	#
 	if (! -f $path) {
-	    print "DEBUG: in $pathname ignoring non-file: $entry\n" if $opt_v > 5;
+	    print "DEBUG: in $pathname ignoring non-file: $entry\n"
+	      if $opt_v > 6;
 	    next;
 	}
 
 	# ignore any non-readable file
 	#
 	if (! -r $path) {
-	    print "DEBUG: in $pathname ignoring non-readable: $entry\n" if $opt_v > 4;
+	    print "DEBUG: in $pathname ignoring non-readable: $entry\n"
+	      if $opt_v > 5;
 	    next;
+	}
+
+	# stat the file
+	#
+	# NOTE: We stat here because perl will have cached the stat data
+	#	due to the above -f and -r tests.  Doing the stat now
+	#	rather than later saves on system calls.
+	#
+	($dev, $ino, undef, undef, undef, undef, undef, undef,
+	 undef, $mtime, $ctime) = stat($filename);
+	if (! defined $dev || ! defined $ino ||
+	    ! defined $mtime || ! defined $ctime) {
+	    print STDERR "$0: FATAL: stat failed for: $path: $!\n";
+	    print "DEBUG: stat error prune #14 $path\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(33) unless defined $opt_a;
+	    closedir DIR;
+	    return;
 	}
 
 	# ignore if we happen to find the -r readme.txt file
@@ -675,31 +708,39 @@ sub wanted($)
 	# This is to avoid duplicate processing and to ensure that
 	# readme file is processed in a special way.
 	#
-	($dev,$ino,) = stat($path);
-	if (! defined $dev || ! defined $ino) {
-	    print STDERR "$0: FATAL: stat failed for: $path: $!\n";
-	    print "DEBUG: stat error prune #15 $path\n" if $opt_v > 1;
+	if (defined $readme_dev && $dev == $readme_dev &&
+	    defined $readme_ino && $ino == $readme_ino) {
+	    print "DEBUG: in $pathname -r readme file, will later ",
+	      "add: $entry\n" if $opt_v > 6;
+	    next;
+	}
+
+	# firewall - must not have seen this parh before
+	#
+	if (defined $path_basename{$path}) {
+	    print STDERR "$0: FATAL: duplicate name found: $path\n";
+	    print "DEBUG: duplicate prune #15 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(34) unless defined $opt_a;
 	    closedir DIR;
 	    return;
 	}
-	if (defined $readme_dev && $dev == $readme_dev &&
-	    defined $readme_ino && $ino == $readme_ino) {
-	    print "DEBUG: in $pathname -r readme file, will later add: $entry\n" if $opt_v > 5;
-	    next;
+
+	# firewall - must not have seen this device/inode number combo before
+	#
+	if (defined $devino_path{"$dev/$ino"}) {
+	    print STDERR "$0: FATAL: dup dev/ino found: dev: $dev inum: $ino\n";
+	    print "DEBUG: duplicate prune #16 $path same file as ",
+	        "$devino_path{"$dev/$ino"}\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(35) unless defined $opt_a;
+	    closedir DIR;
+	    return;
 	}
 
 	# save the found file
 	#
-	if (defined $path_basename{$path}) {
-	    print STDERR "$0: FATAL: duplicate name found: $path\n";
-	    print "DEBUG: duplicate prune #14 $pathname\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(33) unless defined $opt_a;
-	    closedir DIR;
-	    return;
-	}
+	print "DEBUG: recording information about $path\n" if $opt_v > 3;
 	$path_basename{$path} = $entry;
 
 	# save the found basename w/o .ext
@@ -709,14 +750,6 @@ sub wanted($)
 
 	# save the found device/inum for duplicate detection
 	#
-	if (defined $devino_path{"$dev/$ino"}) {
-	    print STDERR "$0: FATAL: duplicate dev.ino found: dev: $dev inum: $ino\n";
-	    print "DEBUG: duplicate prune #16 $path same file as $devino_path{"$dev/$ino"}\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(35) unless defined $opt_a;
-	    closedir DIR;
-	    return;
-	}
 	$devino_path{"$dev/$ino"} = $path;
 
 	# track which paths have the same basename w/o .ext
@@ -733,11 +766,37 @@ sub wanted($)
 	    # save this base w/o .ext in the pathset
 	    push(@{$basenoext_pathset{$basenoext}}, $path);
 	}
+
+	# save the file timestamp
+	#
+	# We favor first the older create or modify times that is after
+	# mintime (Tue Nov  5 00:53:20 1985 UTC).  Failing that we will
+	# take the older non-zero create or modify times.  Failing that
+	# we will use a 0 timestamp
+	#
+	if ($ctime >= $mintime) {
+	    if ($mtime >= $mintime) {
+		$path_filetime{$path} = ($ctime <= $mtime ? $ctime : $mtime);
+    	    } else {
+		$path_filetime{$path} = $ctime;
+	    }
+        } elsif ($mtime >= $mintime) {
+	    $path_filetime{$path} = $mtime;
+	} elsif ($ctime > 0) {
+	    if ($mtime > 0) {
+		$path_filetime{$path} = ($ctime <= $mtime ? $ctime : $mtime);
+    	    } else {
+		$path_filetime{$path} = $ctime;
+	    }
+	} else {
+	    $path_filetime{$path} = 0;
+	}
     }
 
     # cleanup
     #
     closedir DIR;
+    print "DEBUG: finished scanning dir: $pathname\n" if $opt_v > 3;
     return;
 }
 
@@ -748,13 +807,139 @@ sub wanted($)
 #	\@pathset	array of paths to to check
 #
 # returns:
-#	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, else ==> could not get an EXIF timestamp
-#	    $message:	$exitcode==0 ==> timestamp, else error message
+#	timestamp or
+#	undef ==> no valid EXIF timestamp and file timestamp(s) too old
 #
 sub get_timestamp($)
 {
-    XXX - code
+    my ($pathset) = $_;		# get arg
+    my $path;		# a path in the pathset
+    my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
+    my $message;	# $exitcode==0 ==> timestamp, else error message
+    my $oldest;		# oldest timestamp found
+    my $oldest_exif;	# path of oldest EXIF timestamp
+    my %has_exif_ext;	# $has_exif_ext{$path} == 1 ==> $path's as EXIF .ext
+    my $i;
+
+    # see which paths in the pathset have .extensions that might have EXIF data
+    #
+    foreach $path ( @{$pathset} ) {
+	my $path_exit;	# the .ext of the path
+	my $has_exif_ext;  # 1 ==> an .ext that might have EXIF data, 0 ==> no
+
+	# canonicalize the .ext of this path (lower case, chars after final .)
+	#
+	($path_ext = lc($path)) =~ s/^.*\.//;
+
+	# see if this .ext has a like EXIF data holder
+	#
+	$has_exif_ext = 0;
+	foreach $i ( @exif_ext ) {
+	    # see if path's .ext is an EXIF type extension
+	    if ($i eq $path_ext) {
+		$has_exif_ext = 1;
+		break;
+	    }
+	}
+	$has_exif_ext{$path} = $has_exif_ext;
+    }
+
+    # look for files in the pathset that might contain EXIF data
+    #
+    $oldest = 0;
+    foreach $path ( @{$pathset} ) {
+
+	# look for the oldest EXOF timestamps in EXIF based .extensions
+	#
+	if ($has_exif_ext{$path}) {
+
+	    # try to get EXIT timestamp
+	    ($exitcode, $message) = exif_date($path);
+
+	    # it is OK to fail, but if we have a good time, track oldest
+	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest)) {
+		print "DEBUG: get_timestamp EXIF type: $path " .
+		    "EXIF time: $message\n" if $opt_v > 3;
+		$oldest = $message;
+		$oldest_exif = $path;
+	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest)) {
+		print "DEBUG: get_timestamp EXIF type: $path " .
+		    "older EXIF time: $message\n" if $opt_v > 3;
+	    } elsif ($exitcode != 0) {
+	        print "DEBUG: exif_date error code $exifcode: $message\n"
+		  if $opt_v > 4;
+	    }
+	}
+    }
+
+    # If we found EXIF timestamps, return the oldest timestamp
+    #
+    if ($oldest > 0) {
+	print "DEBUG: EXIF type EXIF timestamp: $oldest for $oldest_exif\n"
+	  if $opv_v > 2;
+	return $oldest;
+    }
+
+    # We did not find an EXIF .extenstion that had a EXIF timestamp, so
+    # look for a non-EXIF .extension with an EXIF timestamp in case we
+    # have a EXIF image with a unknown extension or in case we have
+    # an EXIF image without a .extension
+    #
+    foreach $path ( @{$pathset} ) {
+
+	# look for the oldest EXOF timestamps in non-EXIF based .extensions
+	#
+	if (! $has_exif_ext{$path}) {
+
+	    # try to get EXIT timestamp
+	    ($exitcode, $message) = exif_date($path);
+
+	    # it is OK to fail, but if we have a good time, track oldest
+	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest)) {
+		print "DEBUG: get_timestamp non-EXIF type: $path " .
+		    "EXIF time: $message\n" if $opt_v > 3;
+		$oldest = $message;
+		$oldest_exif = $path;
+	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest)) {
+		print "DEBUG: get_timestamp non-EXIF type: $path " .
+		    "older EXIF time: $message\n" if $opt_v > 3;
+	    }
+	}
+    }
+
+    # If we found EXIF timestamps, return the oldest timestamp
+    #
+    if ($oldest > 0) {
+	print "DEBUG: non-EXIF type EXIF timestamp: $oldest for $oldest_exif\n"
+	  if $opv_v > 2;
+	return $oldest;
+    }
+
+    # no EXIF timesamps in set, look for the oldest file timestamp that
+    # is not too old
+    #
+    foreach $path ( @{$pathset} ) {
+
+	# if the file timestamp is not too old
+	#
+	if ($path_filetime{$path} >= $mintime &&
+	    $path_filetime{$path} < $oldest) {
+	    $oldest = $path_filetime{$path};
+	    $oldest_exif = $path;
+	}
+    }
+
+    # If we found a file timestamp that is not too old, use the oldest
+    #
+    if ($oldest > 0) {
+	print "DEBUG: file timestamp: $oldest for $oldest_exif\n"
+	  if $opv_v > 2;
+	return $oldest;
+    }
+
+    # We have no EXIF timestamp and no file timestamp we can use
+    #
+    return undef;
 }
 
 
@@ -845,57 +1030,6 @@ sub exif_date($)
     # return the EXIF timestamp
     #
     return (0, $timestamp);
-}
-
-
-# file_date - return the earlist reasonable create/modify timestamp
-#
-# given:
-#	$filename	image filename to process
-#
-# returns:
-#	($exitcode, $message)
-#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
-#	    $message:	$exitcode==0 ==> timestamp, else error message
-#
-sub file_date($)
-{
-    my ($filename) = @_;	# get arg
-    my $mtime;			# modify timestamp
-    my $ctime;			# create timestamp
-
-    # firewall - file must exist
-    #
-    if (! -e $filename) {
-	return (60, "cannot open");	# exit(60)
-    }
-
-    # stat the file
-    #
-    (undef, undef, undef, undef, undef, undef, undef, undef,
-     undef, $mtime, $ctime) = stat($filename);
-
-    # first try the create timestamp
-    #
-    if (defined $ctime && $ctime >= $mintime) {
-	# use create time
-	print "DEBUG: using: $filename: create timestamp: $ctime\n"
-	    if $opt_v > 4;
-	return (0, $ctime);
-
-    # next try the modify timestamp
-    #
-    } elsif (defined $mtime && $mtime >= $mintime) {
-	# use modify time
-	print "DEBUG: using: $filename: modify timestamp: $ctime\n"
-	    if $opt_v > 4;
-	return (0, $mtime);
-    }
-
-    # we cannot find a useful file timestamp
-    #
-    print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
-    return (61, "file is too old");	# exit(61)
 }
 
 
@@ -1312,6 +1446,57 @@ sub readme_check($)
 }
 
 
+# old_file_date - return the earlist reasonable create/modify timestamp
+#
+# given:
+#	$filename	image filename to process
+#
+# returns:
+#	($exitcode, $message)
+#	    $exitcode:	0 ==> OK, =! 0 ==> exit code
+#	    $message:	$exitcode==0 ==> timestamp, else error message
+#
+sub old_file_date($)	# XXX - remove when code complete
+{
+    my ($filename) = @_;	# get arg
+    my $mtime;			# modify timestamp
+    my $ctime;			# create timestamp
+
+    # firewall - file must exist
+    #
+    if (! -e $filename) {
+	return (60, "cannot open");	# exit(60)
+    }
+
+    # stat the file
+    #
+    (undef, undef, undef, undef, undef, undef, undef, undef,
+     undef, $mtime, $ctime) = stat($filename);
+
+    # first try the create timestamp
+    #
+    if (defined $ctime && $ctime >= $mintime) {
+	# use create time
+	print "DEBUG: using: $filename: create timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $ctime);
+
+    # next try the modify timestamp
+    #
+    } elsif (defined $mtime && $mtime >= $mintime) {
+	# use modify time
+	print "DEBUG: using: $filename: modify timestamp: $ctime\n"
+	    if $opt_v > 4;
+	return (0, $mtime);
+    }
+
+    # we cannot find a useful file timestamp
+    #
+    print "DEBUG: no valid file timestamps: $filename\n" if $opt_v > 4;
+    return (61, "file is too old");	# exit(61)
+}
+
+
 # old_wanted - File::Find tree walking function called at each non-pruned node
 #
 # This function is a callback from the File::Find directory tree walker.
@@ -1538,7 +1723,7 @@ sub old_wanted($)	# XXX remove when code complete
     # $File::Find externals.
     #
     if ($adding_readme != 0) {
-	print "DEBUG: wanted() adding special readme file: ",
+	print "DEBUG: old_wanted() adding special readme file: ",
 	      "$opt_r\n" if $opt_v > 1;
 	print "DEBUG: simulating find() call\n" if $opt_v > 2;
 	$filename = basename($opt_r);
@@ -1565,7 +1750,7 @@ sub old_wanted($)	# XXX remove when code complete
     # canonicalize the path by removing leading ./'s, multiple //'s
     # and trailing /'s
     #
-    print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
+    print "DEBUG: in old_wanted arg: $filename\n" if $opt_v > 3;
     print "DEBUG: File::Find::name: $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
@@ -1705,7 +1890,7 @@ sub old_wanted($)	# XXX remove when code complete
 
     # determine the date of the image by EXIF or filename date
     #
-    ($datecode, $datestamp, $exiffound, $multifound) = timestamp($pathname);
+    ($datecode, $datestamp, $exiffound, $multifound) = old_timestamp($pathname);
     if ($datecode != 0) {
 	print STDERR "$0: FATAL: EXIF image timestamp error $datecode: ",
 		     "$datestamp\n";
@@ -2062,7 +2247,7 @@ sub old_wanted($)	# XXX remove when code complete
 }
 
 
-# timestamp - determine a file date string using EXIF and file timestamps
+# old_timestamp - determine a file date string using EXIF and file timestamps
 #
 # We will first look at EXIF data for a timestamp.  If none is found
 # we will look for a readable related filename that is likely to have
@@ -2248,7 +2433,7 @@ sub old_timestamp($) # XXX - remove when code complete
     # whatever it says ... a timestamp or error.
     #
     print "DEBUG: forced to use file timestamp for $filename\n" if $opt_v > 4;
-    ($errcode, $timestamp) = file_date($filename);
+    ($errcode, $timestamp) = old_file_date($filename);
     if ($opt_v > 4) {
 	if ($errcode == 0) {
 	    print "DEBUG: timestamp for file: $filename: $timestamp\n";
