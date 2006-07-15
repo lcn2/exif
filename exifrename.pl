@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.3 $
-# @(#) $Id: exifrename.pl,v 2.3 2006/07/14 03:00:57 chongo Exp chongo $
+# @(#) $Revision: 2.4 $
+# @(#) $Id: exifrename.pl,v 2.4 2006/07/15 06:26:38 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.3 $, 10;
+my $VERSION = substr q$Revision: 2.4 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -1509,8 +1509,6 @@ sub old_file_date($)	# XXX - remove when code complete
 #	$opt_f		see -f in program usage at top
 #	$opt_o		see -o in program usage at top
 #	$opt_t		see -t in program usage at top
-#	$mv_fwd_chars	see -y seqlen in program usage at top
-#	$mv_end_chars	see -z skchars in program usage at top
 #	$srcdir		where images are from
 #	$destdir	where copied and renamed files go
 #	$rollnum	EXIF roll number
@@ -1518,7 +1516,7 @@ sub old_file_date($)	# XXX - remove when code complete
 #
 # Consider the a file under srcdir:
 #
-#	/srcdir/DCIM/101EOS1D/PV5V5627.CR2
+#	/srcdir/DCIM/101EOS1D/LS1F5627.CR2
 #
 # Assume that the EXIF timestamp (or file timestamp if if lacks
 # EXIF timestamp tags) is:
@@ -1527,108 +1525,40 @@ sub old_file_date($)	# XXX - remove when code complete
 #
 # Then we will create the file:
 #
-#    /destdir/200505/2005005-043/200505-043-101/121525+5627-45-200505-043-101-pg5v.cr2
+#    /destdir/200505/043-101/043-101-20050512-152545-ls1f5627.cr2
 #
 # The created file path is:
 #
 #	/destdir			# destdir path of image library
 #	/200505				# image year & month
-#	/200505-043			# image year & month, - (dash), roll
-#	/200505-043-010			# year & month, -, roll, -, roll-subdir
-#	/121525+5627-45-200505-043-101-pg5v.cr2	# image filename (see below)
+#	/043-101			# roll-subdir
+#	/043-101-20050512-152545-ls1f5627.cr2	# image filename (see below)
 #
-# NOTE: The property of directory names under /destdir that they are
-#	unuqie  and standalone.  One can look at one of these sub-directories
-#	and know where it belongs.  That is why the yyyymm and yyyymm-roll
-#	are repeated in the lower level directories.
+# The filename itself:
 #
-# NOTE: The property of a filename is that they completely define the
-#	directory path under whey they belong.  One can look at a filename
-#	and know where it belongs.
+#	043-101-20050512-152545-ls1f5627.cr2
 #
-# NOTE: Another important property of a filename is that the original
-#	image filename can be re-constructed.  Consider these filenames:
+# If another image was taken during the same second, its name becomes:
 #
-#		121525+5627-45-200505-043-101-pg5v.cr2
-#		121525+5627-45_1-200505-043-101-pg5v_stuff.cr2
-#
-#	the original image filenames were:
-#
-#		PGV55627.CR2
-#		PGV55627STUFF.CR2
-#
-# Consider this filename:
-#
-#	121525+5627-45-200505-043-101-pg5v.cr2
-#
-# If another image was taken during the same second, that 2nd image becomes:
-#
-#	121525+5627-45_1-200505-043-101-pg5v.cr2
+#	043-101-20050512-152545_1-ls1f5628.cr2
 #
 # is constructed out of the following:
 #
-#	12			# image day of month (UTC), 2 digits [01-31]
-#	15			# image hour (UTC), 2 digits [00-23]
-#	25			# image minute of hour (UTC), 2 digits [00-59]
-#	- or +			# - ==> has no sound file, + has sound file
-#	5627			# image sequence number (see NOTE below)
+#	043			# roll number, 3 digits, 0 padded
 #	-			# (dash) separator
-#	45			# image second of minites, 2 digits [00-60]
+#	101			# optional subdir lead chars, w/o -'s, lowercase
+#	-			# (dash) separator
+#	2005			# image 4 digit Year
+#	05			# image month, 2 digits [01-12]
+#	12			# image day of month, 2 digits [01-31]
+#	-			# (dash) separator
+#	15			# image hour (UTC), 2 digits [00-23]
+#	25			# image minute of hour, 2 digits [00-59]
+#	45			# image seconf of minites, 2 digits [00-60]
 #	     _			# (underscore) optional for dups in same sec
 #	     1			# optional digits for dups in same sec
 #	-			# (dash) separator
-#	2005			# image 4 digit Year (UTC)
-#	05			# image month (UTC), 2 digits [01-12]
-#	-			# (dash) separator
-#	043			# roll number, 3 digits, 0 padded
-#	-			# (dash) separator
-#	101			# optional subdir lead chars, w/o -'s lowercase
-#	-			# (dash) separator
-#	pg5v			# imagename w/o 5th-8th chars, lowercase no -'s
-#	    _			# (underscore) optional if trailing chars
-#	    rest		# optional trailing image filename chars
-#	.cr2			# .extension
-#
-# NOTE: The number of leading image filename chars between the UTC ddhhmm- and
-#	the -ss, defaults to 4 characters.  The default length can be changed
-#	by the -y seqlen option.  These chars come from the image filename
-#	after it has been lower cased and had -'s removed AND the initial
-#	image filename chars (which also defaults to 4 and may be changed
-#	by the -z skchars option) have been skipped.
-#
-#	By default, the 1st 4 chars of the image filename are not used as part
-#	of the image sequence number.  These initial image filename characters
-#	are usually fixed for a given camera and are left on the end of
-#	the filename.  This default not-used length can be changed by
-#	the -z skchars option.
-#
-#	If there are any remainng image filename chars beyond the sequence
-#	number and before the .file extension, we put them after an _
-#	(underscore) character.
-#
-#	A typical Canon EOS 1D Mark II N image filename:
-#
-#		pg5v5627.cr2
-#
-#	would, by default, have its chars moved into a filename of this form:
-#
-#		dddhhmm-5627-...-pg5v.cr2
-#
-#	The image filename:
-#
-#		LLLLnnnnXyzzy.ext
-#
-#	would, by default, have its chars moved into a filename of this form:
-#
-#		ddhhmm-nnnn-....-LLLL_Xyzzy.ext
-#
-#	The image filename:
-#
-#		LLLnnnnnWh-ey.ext
-#
-#	with -y 5 -z 3 would produce a filename of this form:
-#
-#		ddhhmm-nnnnn-....-LLL_Whey.ext
+#	ls1f5627.cr2		# image basename, in lower case w/o -'s
 #
 # The 3 digit roll serial number from the file:
 #
@@ -1685,8 +1615,8 @@ sub old_file_date($)	# XXX - remove when code complete
 #
 # and these global vaules set:
 #
-#	$srcdir			top of where images are from
-#	$destdir		top of where copied and renamed files go
+#	$srcdir			where images are from
+#	$destdir		where copied and renamed files go
 #	$File::Find::dir	current directory name
 #	$File::Find::name 	complete pathname to the file
 #	$File::Find::prune	set 1 one to prune current node out of path
@@ -1696,7 +1626,7 @@ sub old_file_date($)	# XXX - remove when code complete
 #	$adding_readme		0 ==> function being called by find()
 #				!= 0  ==> function being called by add_readme()
 #
-sub old_wanted($)	# XXX remove when code complete
+sub old_wanted($)	# XXX - remove when code complete
 {
     my $filename = $_;		# current filename within $File::Find::dir or
 				# absolute path of readme if $adding_readme!=0
@@ -1709,21 +1639,19 @@ sub old_wanted($)	# XXX remove when code complete
     my $datestamp;	# EXIF or filename timestamp of OK, or error msg
     my $yyyymm;		# EXIF or filename timestamp year and month
     my $dd;		# EXIF or filename timestamp day
-    my $hhmm;		# EXIF or filename timestamp hour and minute
-    my $ss;		# EXIF or filename timestamp second
-    my $ss_d;		# EXIF or filename timestamp second and optional _#
+    my $hhmmss;		# EXIF or filename timestamp time
+    my $hhmmss_d;	# EXIF or filename timestamp time and optional _#
     my $dupnum;		# _number de-duplication number
     my $destname;	# the destination filename to form
     my $destpath;	# the full path of the destination file
     my $exiffound;	# 1 ==> valid EXIF time data found, 0 ==> no EXIF time
-    my $multifound;	# 0 ==> only one .ext found, 1 ==> 2+ .ext found
 
     # If we are being called from add_readme() instead of find(),
     # then we have to simulate a File::Find call by setting the
     # $File::Find externals.
     #
     if ($adding_readme != 0) {
-	print "DEBUG: old_wanted() adding special readme file: ",
+	print "DEBUG: wanted() adding special readme file: ",
 	      "$opt_r\n" if $opt_v > 1;
 	print "DEBUG: simulating find() call\n" if $opt_v > 2;
 	$filename = basename($opt_r);
@@ -1732,7 +1660,7 @@ sub old_wanted($)	# XXX remove when code complete
 	if (! defined $filename || ! defined $File::Find::dir ||
 	    ! defined $File::Find::name) {
 	    # skip missing files
-	    print STDERR "$0: FATAL: cannot determine basename and/or ",
+	    print STDERR "$0: Fatal: cannot determine basename and/or ",
 	    		 "dirname and/or absolute path of $_\n";
 	    print "DEBUG: missing file prune #0 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
@@ -1750,7 +1678,7 @@ sub old_wanted($)	# XXX remove when code complete
     # canonicalize the path by removing leading ./'s, multiple //'s
     # and trailing /'s
     #
-    print "DEBUG: in old_wanted arg: $filename\n" if $opt_v > 3;
+    print "DEBUG: in wanted arg: $filename\n" if $opt_v > 3;
     print "DEBUG: File::Find::name: $File::Find::name\n" if $opt_v > 2;
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
@@ -1860,7 +1788,7 @@ sub old_wanted($)	# XXX remove when code complete
     if (($adding_readme == 0 && ! -e $filename) ||
 	($adding_readme != 0 && ! -e $File::Find::name)) {
 	# skip missing files
-	print STDERR "$0: FATAL: skipping missing file: $filename\n";
+	print STDERR "$0: Fatal: skipping missing file: $filename\n";
 	print "DEBUG: missing file prune #10 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(31) unless defined $opt_a;
@@ -1881,26 +1809,103 @@ sub old_wanted($)	# XXX remove when code complete
     if (($adding_readme == 0 && ! -r $filename) ||
 	($adding_readme != 0 && ! -r $File::Find::name)) {
 	# skip non-readable files
-	print STDERR "$0: FATAL: non-readable file: $filename\n";
+	print STDERR "$0: Fatal: non-readable file: $filename\n";
 	print "DEBUG: non-readable file prune #12 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(32) unless defined $opt_a;
 	return;
     }
 
-    # determine the date of the image by EXIF or filename date
+    # Determine 2nd part of the directory we will place the new file in.
     #
-    ($datecode, $datestamp, $exiffound, $multifound) = old_timestamp($pathname);
-    if ($datecode != 0) {
-	print STDERR "$0: FATAL: EXIF image timestamp error $datecode: ",
-		     "$datestamp\n";
-	print "DEBUG: bad timestamp prune #13 $pathname\n" if $opt_v > 0;
+    # The directory we will place the new file in comes from the
+    # roll number, always followed by - (dash), followed by an
+    # optional roll_sub.  This code determines the roll_sub as follows:
+    #
+    #	If we are adding a readme file (-r readme), then we will act as if
+    #	the original file was directly under $srcdir.
+    #
+    #   Else if we are adding a file that is directly under $srcdir,
+    #	then our roll_sub will be empty.
+    #
+    #	Else use the directory that contains the source file to form roll_sub.
+    #	When that directory starts with 978- (3 digits and - (dash)), then we
+    #	remove heading 987-.
+    #
+    #	Next we canonicalize the roll_sub by converting to lower case,
+    #	replace -'s (dashes) with _'s (underscores), and by truncating
+    #	to the first "-s sdirlen" chars.
+    #
+    #   Finally we prepend the roll number follow by a - (dash).
+    #
+    # This means that the file:
+    #
+    #	$srcdir/200505/001-/001--20050515-103055-readme.txt
+    #	$srcdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
+    #	$srcdir/DCIM/101EOS1D/LS1F9876.CR2
+    #
+    # will end up with a roll_sub of:
+    #
+    #	001
+    #	001-100
+    #	001-101
+    #
+    # and wlll to be placed in:
+    #
+    #	$destdir/200505/001-/001--20050515-103055-readme.txt
+    #	$destdir/200505/001-100/001-100-20050515-103055-ls1f1234.cr2
+    #	$destdir/200505/001-101/001-101-20050515-103055-ls1f9876.cr2
+    #
+    if ($adding_readme != 0) {
+	$roll_sub = "";
+	print "DEBUG: adding readme, using empty roll_sub\n" if $opt_v > 4;
+    } elsif ($pathname =~ m|^$srcdir/[^/]+/|o) {
+	$roll_sub = basename(dirname($pathname));
+	if ($roll_sub =~ /^\d{3}-(.*)$/) {
+	    $roll_sub = $1;
+	}
+	print "DEBUG: orig roll_sub is: $roll_sub\n" if $opt_v > 4;
+    } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
+	$roll_sub = "";
+	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
+    } else {
+	print STDERR "$0: Fatal: $pathname not under $srcdir\n";
+	print "DEBUG: non-srcdir prune #13 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(33) unless defined $opt_a;
 	return;
     }
+    $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
+    $roll_sub = "" if ($roll_sub eq "dcim");
+    $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+    $roll_sub = substr($roll_sub, 0, $subdirchars) if $subdirchars > 0;
+    $roll_sub = "$rollnum-$roll_sub";
+    print "DEBUG: roll_sub name: $roll_sub\n" if $opt_v > 2;
+
+    # untaint roll_sub
+    #
+    if ($roll_sub =~ /$untaint/o) {
+    	$roll_sub = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in roll_sub \n";
+	print "DEBUG: tainted roll_sub prune #14 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(34) unless defined $opt_a;
+	return;
+    }
+
+    # determine the date of the image by EXIF or filename date
+    #
+    ($datecode, $datestamp, $exiffound) = old_timestamp($pathname);
+    if ($datecode != 0) {
+	print STDERR "$0: Fatal: EXIF image timestamp error $datecode: ",
+		     "$datestamp\n";
+	print "DEBUG: bad timestamp prune #15 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(35) unless defined $opt_a;
+	return;
+    }
     print "DEBUG: EXIF image / file timestamp: $datestamp\n" if $opt_v > 3;
-    print "DEBUG: multifound: $multifound\n" if $opt_v > 3;
 
     # If we are moving and we are only moving non-EXIF files, then
     # ignore bug to not prune EXIF data was found
@@ -1929,109 +1934,16 @@ sub old_wanted($)	# XXX remove when code complete
     	return;
     }
 
-    # convert timestamp to UTC year and month
+    # untaint datestamp
     #
-    $yyyymm = strftime("%Y%m", localtime($datestamp));
-    if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
-	$yyyymm = $1;
+    if ($datestamp =~ /$untaint/o) {
+	$datestamp = $1;
     } else {
-	print STDERR "$0: FATAL: strange chars in yyyymm \n";
-	print "DEBUG: tainted yyyymm prune #14 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(34) unless defined $opt_a;
-	return;
-    }
-
-    # convert timestamp to UTC day of month
-    #
-    $dd = strftime("%d", localtime($datestamp));
-    if (defined $dd && $dd =~ /$untaint/o) {
-	$dd = $1;
-    } else {
-	print STDERR "$0: FATAL: strange chars in dd \n";
-	print "DEBUG: tainted dd prune #15 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(35) unless defined $opt_a;
-	return;
-    }
-
-    # convert timestamp to UTC hour and minute
-    #
-    $hhmm = strftime("%H%M", localtime($datestamp));
-    if (defined $hhmm && $dd =~ /$untaint/o) {
-	$hhmm = $1;
-    } else {
-	print STDERR "$0: FATAL: strange chars in dd \n";
-	print "DEBUG: tainted dd prune #16 $pathname\n" if $opt_v > 0;
+	print STDERR "$0: Fatal: strange chars in datestamp \n";
+	print "DEBUG: tainted datestamp prune #16 $pathname\n"
+	    if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(36) unless defined $opt_a;
-	return;
-    }
-
-    # convert timestamp to UTC second
-    #
-    $ss = strftime("%S", localtime($datestamp));
-    if (defined $ss && $ss =~ /$untaint/o) {
-	$ss = $1;
-    } else {
-	print STDERR "$0: FATAL: strange chars in dd \n";
-	print "DEBUG: tainted dd prune #17 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(37) unless defined $opt_a;
-	return;
-    }
-
-    # Determine the roll_sub name.
-    #
-    # The directory we will place the new file in comes from the
-    # UTC timestamp year, - (dash), roll number, - (dash), followed by an
-    # optional roll_sub.  This code determines the roll_sub as follows:
-    #
-    #	1) If we are adding a readme file (-r readme), then we will act as if
-    #	the original file was directly under $srcdir.
-    #
-    #   2) If we are adding a file that is directly under $srcdir,
-    #	then our roll_sub will be empty,
-    #
-    #	3) else use the directory that contains the source file to form
-    #	roll_sub.  When that directory starts with 978- (3 digits and
-    #	- (dash)), then we remove heading 987-.
-    #
-    #	4) Next we canonicalize the roll_sub by converting to lower case,
-    #	replace -'s (dashes) with _'s (underscores), and by truncating
-    #	to the first "-s sdirlen" chars.
-    #
-    if ($adding_readme != 0) {
-	$roll_sub = "";
-	print "DEBUG: adding readme, using empty roll_sub\n" if $opt_v > 4;
-    } elsif ($pathname =~ m|^$srcdir/[^/]+/|o) {
-	$roll_sub = basename(dirname($pathname));
-	if ($roll_sub =~ /^\d{3}-(.*)$/) {
-	    $roll_sub = $1;
-	}
-	print "DEBUG: orig roll_sub is: $roll_sub\n" if $opt_v > 4;
-    } elsif ($pathname =~ m|^$srcdir/[^/]+$|o) {
-	$roll_sub = "";
-	print "DEBUG: no top dir, using empty roll_sub\n" if $opt_v > 4;
-    } else {
-	print STDERR "$0: FATAL: $pathname not under $srcdir\n";
-	print "DEBUG: non-srcdir prune #13 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(33) unless defined $opt_a;
-	return;
-    }
-    $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
-    $roll_sub = "" if ($roll_sub eq "dcim");
-    $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
-    $roll_sub = substr($roll_sub, 0, $subdirchars) if $subdirchars > 0;
-    print "DEBUG: roll_sub name: $roll_sub\n" if $opt_v > 2;
-    if ($roll_sub =~ /$untaint/o) {
-    	$roll_sub = $1;
-    } else {
-	print STDERR "$0: FATAL: strange chars in roll_sub \n";
-	print "DEBUG: tainted roll_sub prune #14 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(34) unless defined $opt_a;
 	return;
     }
 
@@ -2047,73 +1959,50 @@ sub old_wanted($)	# XXX remove when code complete
 
     # If the lowercase name is already of the form:
     #
-    #	121525+5627-45-200505-043-101-pg5v.cr2
-    #	121525+5627-45_1-200505-043-101-pg5v.cr2
+    #	043-101-20050512-152545-ls1f5628.cr2
+    #	043-101-20050512-152545_1-ls1f5628.cr2
     #
-    # we convert it back to:
+    # convert it to just ls1f5628.cr2 so that we won't keep adding
+    # date strings to the filename.
     #
-    #	pg5v5628.cr2
-    #
-    # This is so that we won't keep adding date strings, roll numbers, etc
-    # to files that already have them.
-    #
-    # Also filenames of the form:
-    #
-    #	121525+5627-45-200505-043-101-pg5v_stuff.cr2
-    #	121525+5627-45_1-200505-043-101-pg5v_stuff.cr2
-    #
-    # are converted into:
-    #
-    #	pg5v5628stuff.cr2
-    #
-    # as well.
-    #
-    if ($lowerfilename =~ m{
-    			  \d{6}		# ddmmhh
-			  [-+]		# - (dash) or + (plus) separator
-			  ([^-]*)	# $1: sequence number
-			  -		# - (dash) separator
-			  \d{2}		# ss
-			  (_\d+)?	# $2: opt digits for dups in same sec
-			  \d{6}		# yyyymm
-			  -		# - (dash) separator
-			  [^-]*		# roll number
-			  -		# - (dash) separator
-			  [^-]*		# sub-roll number
-			  -		# - (dash) separator
-			  ([^_.]*)	# $3: image filename chars before seqnum
-			  (_[^.]*)?	# $4: optiinal imagename chars after seq
-			  (\..*)?$	# $5: optional .extension
-    			  }ix) {
-	$lowerfilename = $3 . $1 . substr($4, 1) . $5;
+    if ($lowerfilename =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+	$lowerfilename = $2;
     }
     $lowerfilename =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
     print "DEBUG: final lowerfilename: $lowerfilename\n" if $opt_v > 3;
 
-    # ensure the $destdir/yyyymm/yyyymm-rol/yyyymm-rol-sub direct path exists
+    # convert the timestamp into date strings
     #
-    $destpath = "$destdir/$yyyymm";
-    ($errcode, $errmsg) = form_dir($destpath);
+    $yyyymm = strftime("%Y%m", localtime($datestamp));
+    $dd = strftime("%d", localtime($datestamp));
+
+    # untaint yyyymm
+    #
+    if ($yyyymm =~ /$untaint/o) {
+	$yyyymm = $1;
+    } else {
+	print STDERR "$0: Fatal: strange chars in yyyymm \n";
+	print "DEBUG: tainted yyyymm prune #17 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	exit(37) unless defined $opt_a;
+	return;
+    }
+
+    # ensure the $destdir/yyyymm/rol-sub direct path exists
+    #
+    ($errcode, $errmsg) = form_dir("$destdir/$yyyymm");
     if ($errcode != 0) {
-	print STDERR "$0: FATAL: mkdir error: $errmsg for $destpath\n";
+	print STDERR "$0: Fatal: mkdir error: $errmsg for ",
+		     "$destdir/$yyyymm\n";
 	print "DEBUG: mkdir err prune #18 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(38) unless defined $opt_a;
 	return;
     }
-    $destpath .= "/$yyyymm-$rollnum";
-    ($errcode, $errmsg) = form_dir($destpath);
+    ($errcode, $errmsg) = form_dir("$destdir/$yyyymm/$roll_sub");
     if ($errcode != 0) {
-	print STDERR "$0: FATAL: mkdir error: $errmsg for $destpath\n";
-	print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
-	$File::Find::prune = 1;
-	exit(39) unless defined $opt_a;
-	return;
-    }
-    $destpath .= "/$yyyymm-$rollnum-$roll_sub";
-    ($errcode, $errmsg) = form_dir($destpath);
-    if ($errcode != 0) {
-	print STDERR "$0: FATAL: mkdir error: $errmsg for $destpath\n";
+	print STDERR "$0: Fatal: mkdir error: $errmsg for ",
+		     "$destdir/$yyyymm/$roll_sub\n";
 	print "DEBUG: mkdir err prune #19 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(39) unless defined $opt_a;
@@ -2125,16 +2014,14 @@ sub old_wanted($)	# XXX remove when code complete
     # If the filename exists, start adding _X for X 0 to 99
     # after the seconds.
     #
+    $hhmmss = strftime("%H%M%S", localtime($datestamp));
+    $hhmmss_d = $hhmmss;	# assume no de-dup is needed
     $dupnum = 0;
     do {
-	# determine destination filename and full path, for example:
+	# determine destination filename and full path
 	#
-	#	121525+5627-45-200505-043-101-pg5v_stuff.cr2
-	#
-	XXX - change the filename formation to above form
-	$destname = "$yyyymm" . ($multifound ? "+" : "-') . XXX
-	$destname = "$yyyymm$dd-$hhmmss_d-$lowerfilename";
-	$destpath = "$destpath/$destname";
+	$destname = "$roll_sub-$yyyymm$dd-$hhmmss_d-$lowerfilename";
+	$destpath = "$destdir/$yyyymm/$roll_sub/$destname";
 
 	# prep for next cycle if destination already exists
 	#
@@ -2164,7 +2051,7 @@ sub old_wanted($)	# XXX remove when code complete
 	# firewall - do not allow more than 99 duplicates
 	#
 	if ($dupnum > 99) {
-	    print STDERR "$0: FATAL: more than 99 duplicates for ",
+	    print STDERR "$0: Fatal: more than 99 duplicates for ",
 			 "$yyyymm-$roll_sub-$dd-$hhmmss-$lowerfilename\n";
 	    print "DEBUG: 100 dups prune #20 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
@@ -2180,7 +2067,7 @@ sub old_wanted($)	# XXX remove when code complete
     if ($pathname =~ /$untaint/o) {
 	$pathname = $1;
     } else {
-	print STDERR "$0: FATAL: strange chars in pathname \n";
+	print STDERR "$0: Fatal: strange chars in pathname \n";
 	print "DEBUG: tainted pathname prune #21 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(41) unless defined $opt_a;
@@ -2192,7 +2079,7 @@ sub old_wanted($)	# XXX remove when code complete
     if ($destpath =~ /$untaint/o) {
 	$destpath = $1;
     } else {
-	print STDERR "$0: FATAL: strange chars in destpath \n";
+	print STDERR "$0: Fatal: strange chars in destpath \n";
 	print "DEBUG: tainted destpath prune #22 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	exit(42) unless defined $opt_a;
@@ -2203,7 +2090,7 @@ sub old_wanted($)	# XXX remove when code complete
     #
     if (defined $opt_m) {
 	if (move($pathname, $destpath) == 0) {
-	    print STDERR "$0: FATAL: in ", $File::Find::dir, ": ",
+	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "mv $filename $destpath failed: $!\n";
 	    print "DEBUG: mv err prune #23 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
@@ -2213,7 +2100,7 @@ sub old_wanted($)	# XXX remove when code complete
 	print "DEBUG: success: mv $filename $destpath\n" if $opt_v > 2;
     } else {
 	if (copy($pathname, $destpath) == 0) {
-	    print STDERR "$0: FATAL: in ", $File::Find::dir, ": ",
+	    print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 			 "cp $filename $destpath failed: $!\n";
 	    print "DEBUG: cp err prune #24 $pathname\n" if $opt_v > 0;
 	    $File::Find::prune = 1;
@@ -2226,7 +2113,7 @@ sub old_wanted($)	# XXX remove when code complete
     # compare unless -m
     #
     if (! defined $opt_m && compare($pathname, $destpath) != 0) {
-	print STDERR "$0: FATAL: in ", $File::Find::dir, ": ",
+	print STDERR "$0: Fatal: in ", $File::Find::dir, ": ",
 		     "compare of $filename and $destpath failed\n";
 	print "DEBUG: cmp err prune #25 $pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
@@ -2261,8 +2148,8 @@ sub old_wanted($)	# XXX remove when code complete
 #
 # It is frequently the case that non-EXIF files created by cameras
 # have a filename that is similar to an image file.  For example on
-# the Canon EOS 1D Mark II N, one may have an image file "pg5v5627.cr2"
-# and a related sound file "pg5v5627.wav".  It would be useful to
+# the Canon EOS 1D Mark II, one may have an image file "ls1f5627.cr2"
+# and a related sound file "ls1f5627.wav".  It would be useful to
 # associate the wav file with the image file.  Therefore an attempt
 # will be made to look for a corresponding EXIF image file when
 # a non-EXIF file is found.
@@ -2270,8 +2157,8 @@ sub old_wanted($)	# XXX remove when code complete
 # When we are called, we will look for a readable file that has the same
 # basename as our $filename arg, but with an extension that implies
 # it is an image file.  For example, if we are called with a filename of
-# "/.../pg5v5627.wav", we will look for readable files such as
-# "/.../pg5v5627.cr2", "/.../pg5v5627.jpg", etc.
+# "/.../ls1f5627.wav", we will look for readable files such as
+# "/.../ls1f5627.cr2", "/.../ls1f5627.jpg", etc.
 #
 # The order of extensions is defined by the @exif_ext array.  We will
 # search for readable files in order of that array.  If we find a
@@ -2283,79 +2170,33 @@ sub old_wanted($)	# XXX remove when code complete
 #
 # NOTE: The non-EXIF and related EXIF files must be in the same directory.
 #
-# NOTE: Regarding image filenames created by cameras:
-#
-# As created on the card, Different cameras have different image filenames.
-# For example:
-#
-#	Canon EOS 1D Mark II N:		PG5V5627.CR2
-#	Canon EOS 1D Mark II:		LS1F5627.CR2
-#	Canon 20D (and 20Da):		IMG_5627.CR2
-#
-# Some cameras, such as the Canon EOS 1D Mark II N, have the ability to
-# change the leading 4 characters of the image filename.  Some cameras
-# place images in a sub-directory while others do not.  Some cameras allow
-# to name the folder, while others do not.
-#
 # given:
 #	$filename	image filename to process
 #
 # returns:
-#	($exitcode, $message, $exiffound, $multifound)
+#	($exitcode, $message, $exiffound)
 #	    $exitcode:	0 ==> OK, else ==> exit code
 #	    $message:	$exitcode==0 ==> timestamp, else error message
 #	    $exiffound:	1 ==> valid EXIF time data found, 0 ==> no EXIF time
-#	    $multifound: 1 ==> 2+ files with different .exts found, 0 ==> 1
 #
-sub old_timestamp($) # XXX - remove when code complete
+sub old_timestamp($)	# XXX - remove when code complete
 {
     my ($filename) = @_;	# get args
     my $noext;			# filename without any extension
     my $exif_file;		# a potential EXIF related filename
     my $extension;		# a potential EXIF related file extension
     my $errcode;		# 0 ==> OK
-    my $timestamp;		# seconds since the epoch of early tstamp or -1
+    my $timestamp = -1;	# seconds since the epoch of early tstamp or -1
     my $filename_dev;		# device of the $filename arg
     my $filename_ino;		# inode number of the $filename arg
-    my $count;			# number of files found
-
-    # setup for processing filename`
-    #
-    $timestamp = -1;
-    $multifound = 0;
-    ($noext = $filename) =~ s|\.[^./]*$||;
-    ($filename_dev, $filename_ino, ) = stat($filename);
-    if (defined $filename_dev && defined $filename_dev) {
-	$count = 1;
-    } else {
-	$count = 0;
-    }
 
     # try to get an EXIF based timestamp
     #
     print "DEBUG: looking for EXIF timestamp in $filename\n" if $opt_v > 4;
     ($errcode, $timestamp) = exif_date($filename);
     if ($errcode == 0) {
-
-        # look for filename with a different extension
-	#
-	foreach $extension ( @all_ext ) {
-	    $exif_file = "$noext.$extension";
-	    if ($exif_file ne $filename && -r $exif_file) {
-		($exif_dev, $exif_ino, ) = stat($exif_file);
-		if (defined $exif_dev && defined $exif_ino &&
-		    ($filename_ino != $exif_ino ||
-		     $filename_dev != $exif_dev)) {
-		    ++$count;
-		    break;
-		}
-	    }
-	}
-
-	# return information on this EXIF data containing file
-        #
 	print "DEBUG: EXIF timestamp for $filename: $timestamp\n" if $opt_v > 4;
-	return (0, $timestamp, 1, ($count > 1));
+	return (0, $timestamp, 1);
     }
     print "DEBUG: EXIF timestamp $filename: return code: $errcode: ",
     	  "$timestamp\n" if $opt_v > 4;
@@ -2363,6 +2204,8 @@ sub old_timestamp($) # XXX - remove when code complete
     # We did not find a valid EXIF in the filename, so we will
     # look for related files that might have EXIF data
     #
+    ($filename_dev, $filename_ino, ) = stat($filename);
+    ($noext = $filename) =~ s|\.[^./]*$||;
     foreach $extension ( @exif_ext ) {
 
 	# Look for a related readable file that is likely to have
@@ -2384,7 +2227,6 @@ sub old_timestamp($) # XXX - remove when code complete
 	    # for hard links or symlinks.  We match on the
 	    # device and inode number in addition to the filename.
 	    #
-	    ++$count;
 	    ($exif_dev, $exif_ino, ) = stat($exif_file);
 	    if (defined $filename_dev && defined $exif_dev &&
 	    	$filename_dev == $exif_dev &&
@@ -2406,7 +2248,7 @@ sub old_timestamp($) # XXX - remove when code complete
 	    if ($errcode == 0) {
 		print "DEBUG: found related EXIF timestamp in $exif_file: ",
 			"$timestamp\n" if $opt_v > 4;
-		return (0, $timestamp, 0, ($count > 1));
+		return (0, $timestamp, 0);
 	    }
 	    print "DEBUG: EXIF timestamp $filename: EXIF code: $errcode: ",
 		  "$timestamp\n" if $opt_v > 5;
@@ -2423,7 +2265,7 @@ sub old_timestamp($) # XXX - remove when code complete
 	if ($errcode == 0) {
 	    print "DEBUG: text timestamp for file: $filename: $timestamp\n"
 	        if $opt_v > 4;
-	    return (0, $timestamp, 0, ($count > 1));
+	    return (0, $timestamp, 0);
 	}
 	print "DEBUG: no valid text date found in $filename\n" if $opt_v > 4;
     }
@@ -2433,7 +2275,7 @@ sub old_timestamp($) # XXX - remove when code complete
     # whatever it says ... a timestamp or error.
     #
     print "DEBUG: forced to use file timestamp for $filename\n" if $opt_v > 4;
-    ($errcode, $timestamp) = old_file_date($filename);
+    ($errcode, $timestamp) = file_date($filename);
     if ($opt_v > 4) {
 	if ($errcode == 0) {
 	    print "DEBUG: timestamp for file: $filename: $timestamp\n";
@@ -2442,5 +2284,5 @@ sub old_timestamp($) # XXX - remove when code complete
 	    	  "$timestamp\n";
 	}
     }
-    return ($errcode, $timestamp, 0, ($count > 1));
+    return ($errcode, $timestamp, 0);
 }
