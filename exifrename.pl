@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.4 $
-# @(#) $Id: exifrename.pl,v 2.4 2006/07/15 06:26:38 chongo Exp chongo $
+# @(#) $Revision: 2.5 $
+# @(#) $Id: exifrename.pl,v 2.5 2006/07/15 06:30:30 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -35,7 +35,7 @@
 use strict;
 use bytes;
 use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
-            $opt_s $opt_r $opt_n $opt_y $opt_z);
+            $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.4 $, 10;
+my $VERSION = substr q$Revision: 2.5 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -60,20 +60,23 @@ my $destdev;	# device of $destdir
 my $destino;	# inode numner of $destdir
 my $rollnum;	# EXIF roll number
 my $exiftool;	# Image::ExifTool object
-# NOTE: We will only cd into dirs whose name is only [-+\w\s./] chars
+# NOTE: We will only cd into paths whose name is not tainted
 my $untaint = qr|^([-+\w\s./]+)$|; 	# untainting path pattern
+my $untaint_file = qr|^([-+\w\s.]+)$|; 	# untainting pattern w/o the /
 my $datelines = 16;	# date: must be in the 1st datelines of a file
 my %mname = (
     "Jan" => 0, "Feb" => 1, "Mar" => 2, "Apr" => 3, "May" => 4, "Jun" => 5,
     "Jul" => 6, "Aug" => 7, "Sep" => 8, "Oct" => 9, "Nov" => 10, "Dec" => 11,
 );
-my $subdirchars = 3;	# number of initial chars of subdir to use in path
+my $roll_sub_maxlen = 3;	# max length of a roll_sub (0 ==> unlimited)
+my $roll_sub_skip = 0;	# ignore this many leading chars when forming a roll_sub
 my $rollfile;		# file that keeps track of next roll number
 my $mv_fwd_chars = 4;	# chars after initial -z skchars put near filename front
 my $mv_end_chars = 4;	# initial -z skchars put near end of filename
-my $readme_path = undef;	# if -r readme, this is the absolute path
+my $readme_path = undef;	# if -r readme, this is the absolute src path
 my $readme_dev = undef;		# if -r readme, this is the device number
 my $readme_ino = undef;		# if -r readme, this is the inode number
+my $readme_timestamp = undef;	# if -r readme, this is its special timestamp
 
 
 # EXIF timestamp related tag names to look for
@@ -91,19 +94,24 @@ my @exif_ext = qw(
 #
 #	$path_basename{$path} == basename of $path
 #	$path_basenoext{$path} == basename of $path w/o .ext
+#	$path_roll_sub{$path} == roll number subdirectory (roll_sub) or undef
+#	    NOTE: undef ==> put file under 2nd level directory, not 3rd
 #	$devino_path{"file_dev/file_inum"} == path
 #	$path_filetime{$path} == file non-EXIF timestamp
 #	$need_plus{$path} == 0 ==> use -, 1 ==> multiple found, use +
 #	$basenoext_pathset{$basenoext} == array of paths with dup base w/o .ext
-#	$pathset_timestamp{$basenoext} == timestamp for this pathset
+#	$pathset_timestamp{$basenoext} == timestamp basename of $path w/o .ext
+#	$path_destdir{$path} == full path of where to place destination file
 #
 my %path_basename;
 my %path_basenoext;
+my %path_roll_sub;
 my %devino_path;
 my %path_filetime;
 my %need_plus;
 my %basenoext_pathset;
 my %pathset_timestamp;
+my %path_destdir;
 
 # timestamps prior to:
 #	Tue Nov  5 00:53:20 1985 UTC
@@ -114,19 +122,20 @@ my $mintime = 500000000;
 
 # usage and help
 #
-my $usage = "$0 [-a] [-c] [-e exifroll] [-m] [-n rollnum] [-o]\n" .
-	"    [-r readme] [-s sdirlen] [-t] [-y seqlen] [-z skchars]\n" .
+my $usage = "$0 [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n" .
+	"    [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
 	"    [-h] [-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
-    -a           don't abort/exit after a fatal error (def: do)
+    -a           don't abort/exit after post-setup fatal errors (def: do)
     -c           don't verify/compare files after they are copied (def: do)
     -e exifroll  read roll number from exifroll (def: ~/.exifroll)
+    -k roll_subskip	 skip the leading roll_subskip chars (def: 0)
     -m           move, do not copy files from srcdir to destdir (def: copy)
     -n rollnum   roll is rollnum, dont update exifroll (def: use ~/exifroll)
     -o           overwrite, don't add _# after time on duplicates (def: add)
     -r readme    add readme as if it was srcdir/readme.txt (def: don't)
-    -s sdirlen   initial top sub-dir chars to use (def: 3, 0 ==> use all)
+    -s roll_sublen	max length of roll_sub (def: 3, 0 ==> unlimited)
     -t           don't touch modtime to match EXIF/file image (def: do)
     -y seqlen    sequnce length, image filename chars after skchars (def: 4)
     -z skchars    initial imagename chars not part of sequence number (def: 4)
@@ -145,6 +154,7 @@ my %optctl = (
     "e=s" => \$opt_e,
     "c" => \$opt_c,
     "h" => \$opt_h,
+    "k=i" => \$opt_k,
     "m" => \$opt_m,
     "n=s" => \$opt_n,
     "o" => \$opt_o,
@@ -162,6 +172,7 @@ my %optctl = (
 sub parse_args();
 sub wanted();
 sub dir_setup();
+sub destdir_path($$$);
 sub get_timestamp($);
 sub exif_date($);
 sub text_date($);
@@ -180,8 +191,6 @@ MAIN:
 {
     my %find_opt;	# File::Find directory tree walk options
     my %exifoptions;	# Image::ExifTool options
-    my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
-    my $message;	# $exitcode==0 ==> timestamp, else error message
     my $basename_noext;	# pathset basename without .extension
     my $err;		# >0 ==> fatal error number, 0 ==> OK
 
@@ -268,9 +277,28 @@ MAIN:
     }
     exit($err) if ($err > 0);
 
+    # add in readme.txt if -r readme was given
+    #
+    if (defined $readme_path && defined $readme_timestamp &&
+        defined $readme_dev && defined $readme_ino) {
+	$readme_path{$readme_path} = "readme.txt";
+	$path_basenoext{$readme_path} = "readme";
+	$path_rollsub{$readme_path} = undef;
+	$devino_path{"$readme_dev/$readme_ino"} = $readme_path;
+	$path_filetime{$readme_path} = $readme_timestamp;
+	$need_plus{$readme_path} = 0;
+	push(@{$basenoext_pathset{"readme"}, $readme_path);
+	$pathset_timestamp{"readme"} = $readme_timestamp;
+	# NOTE: $path_destdir{$readme_path} will be filled in by dir_setup();
+    }
+
     # setup directories
     #
+    # NOTE: This also fills in %path_destdir
+    #
     dir_setup();
+
+    XXX - more code here
 
     # all done
     #
@@ -308,23 +336,34 @@ sub parse_args()
 	print STDERR "$0: FATAL: -e exifroll conflights with -n rollnum\n";
 	exit(5);
     }
+    if (defined $opt_k && $opt_k < 0) {
+	print STDERR "$0: FATAL: -k roll_subskip must be >= 0\n";
+	exit(6);
+    }
+    if (defined $opt_s && $opt_s < 0) {
+	print STDERR "$0: FATAL: -s roll_sublen must be >= 0\n";
+	exit(7);
+    }
     if (defined $opt_y && $opt_y < 0) {
 	print STDERR "$0: FATAL: -y seqlen must be >= 0\n";
-	exit(6);
+	exit(8);
     }
     if (defined $opt_z && $opt_z < 0) {
 	print STDERR "$0: FATAL: -z skchars must be >= 0\n";
-	exit(7);
+	exit(9);
     }
-    $subdirchars = $opt_s if defined $opt_s;
+    $roll_sub_maxlen = $opt_s if defined $opt_s;
+    $roll_sub_skip = $opt_k if defined $opt_k;
     $rollfile = $opt_e if defined $opt_e;
     # canonicalize srcdir removing leading ./'s, multiple //'s, trailing /'s
     $srcdir = $ARGV[0];
+    $srcdir = abs_path($srcdir);
     $srcdir =~ s|^(\./+)+||;
     $srcdir =~ s|//+|/|g;
     $srcdir =~ s|(.)/+$|$1|;
     # canonicalize destdir removing leading ./'s, multiple //'s, trailing /'s
     $destdir = $ARGV[1];
+    $destdir = abs_path($destdir);
     $destdir =~ s|^(\./+)+||;
     $destdir =~ s|//+|/|g;
     $destdir =~ s|(.)/+$|$1|;
@@ -335,6 +374,7 @@ sub parse_args()
 	print " -a" if defined $opt_a;
 	print " -c" if defined $opt_c;
 	print " -e $opt_e" if defined $opt_e;
+	print " -k $opt_k" if defined $opt_k;
 	print " -m" if defined $opt_m;
 	print " -n $opt_n" if defined $opt_n;
 	print " -o" if defined $opt_o;
@@ -354,9 +394,10 @@ sub parse_args()
 		($opt_o ? "override" : "add _# on"),
 		" duplicate files\n";
 	print "DEBUG: ~/exifroll file: $rollfile\n";
-	print "DEBUG: use ",
-		($subdirchars > 0 ? $subdirchars : "all"),
-		" chars from highest subdir to form path\n";
+	print "DEBUG: roll_sub max length is ",
+		($roll_sub_maxlen > 0 ? $roll_sub_maxlen : "unlimited"), "\n";
+	print "DEBUG: ignore the leading $roll_sub_skip chars when forming ",
+		"a roll_sub\n";
 	print "DEBUG: ", ($opt_t ? "don't" : "do"), " touch file modtimes\n";
 	print "DEBUG: treating $opt_r as if it was $srcdir/readme.txt\n"
 		if $opt_r;
@@ -371,9 +412,86 @@ sub parse_args()
 	($readme_dev, $reame_ino,) = stat($readme_path);
 	if (! defined $readme_dev || ! defined $readme_ino) {
 	    print STDERR "$0: FATAL: stat error on $readme_path: $!\n";
-	    exit(8);
+	    exit(10);
 	}
     }
+}
+
+
+# destdir_path - return the components of the subdirs for a given srcdir path
+#
+# given:
+#	$timestamp	the EXIF or file timestamp of a given path
+#	$roll		roll number
+#	$roll_sub	part of sub-dir name of lowest directory in src path
+#			   or undef
+#
+# NOTE: In the case of the -r readme.txt file, we the roll_sub will
+#	be undef and $dir3 will be undef because that file will
+#	do under just $destdir/$dir1/$dir2.
+#
+# returns:
+#	($dir1, $dir2, $dir3) == the 3 directory names for a given path
+#	The destination directory will be $destdir/$dir1/$dir2/$dir3.
+#
+# NOTE: Does not return on error.
+#
+sub destdir_path($$$)
+{
+    my ($timestamp, $roll, $roll_sub) = @_;
+    my $yyyymm;		# EXIF or filename timestamp UTC year and UTC month
+
+    # convert timestamp into a yyyymm date in UTC
+    #
+    $yyyymm = strftime("%Y%m", gmtime($timestamp));
+    if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
+	$yyyymm = $1;
+    } else {
+	print STDERR "$0: FATAL: strange chars in yyyymm ",
+	    "for timestamp: $timestamp\n";
+	exit(34);
+    }
+
+    # firewall - untaint and sanity check roll number
+    #
+    if ($roll =~ /$untaint_file/o) {
+    	$roll = $1;
+    } else {
+	print STDERR "$0: FATAL: bogus chars in roll\n";
+	exit(45);
+    }
+    if ($roll =~ /^\s*$/) {
+	print STDERR "$0: FATAL: roll is empty or only has whitespace\n";
+	exit(45);
+    } elsif ($roll =~ /^\./) {
+	print STDERR "$0: FATAL: roll start with a .\n";
+	exit(45);
+    }
+
+    # firewall - untaint and sanity check roll_sub
+    #
+    if (defined $roll_sub) {
+	if ($roll_sub =~ /$untaint_file/o) {
+	    $roll_sub = $1;
+	} else {
+	    print STDERR "$0: FATAL: bogus chars in roll_sub\n";
+	    exit(45);
+	}
+	if ($roll_sub =~ /^\s*$/) {
+	    print STDERR "$0: FATAL: roll_sub is empty or ",
+	      "only has whitespace\n";
+	    exit(45);
+	} elsif ($roll_sub =~ /^\./) {
+	    print STDERR "$0: FATAL: roll_sub start with a .\n";
+	    exit(45);
+	}
+    } else {
+	$roll_sub = undef;
+    }
+
+    # return the 3 levels
+    #
+    return ($yyyymm, $roll, $roll_sub);
 }
 
 
@@ -394,23 +512,29 @@ sub parse_args()
 sub dir_setup()
 {
     my ($errcode, $errmsg);	# form_dir return values
+    my @need_subdir;		# directories under $destdir that are needed
+    my $path;			# a srcdir path to process
+    my $dir1;			# 1st level subdir under destdir
+    my $dir2;			# 2nd level subdir under destdir
+    my $dir3;			# 3rd level subdir under destdir
+    my $err;			# >0 ==> fatal error number, 0 ==> OK
 
     # firewall - check for a sane srcdir
     #
     if (! -e $srcdir) {
-	print STDERR "$0: srcdir does not exist: $srcdir\n";
+	print STDERR "$0: FATAL: srcdir does not exist: $srcdir\n";
 	exit(20);
     }
     if (! -d $srcdir) {
-	print STDERR "$0: srcdir is not a directory: $srcdir\n";
+	print STDERR "$0: FATAL: srcdir is not a directory: $srcdir\n";
 	exit(21);
     }
     if (! -r $srcdir) {
-	print STDERR "$0: srcdir is not readable: $srcdir\n";
+	print STDERR "$0: FATAL: srcdir is not readable: $srcdir\n";
 	exit(22);
     }
     if (! -x $srcdir) {
-	print STDERR "$0: srcdir is not searchable: $srcdir\n";
+	print STDERR "$0: FATAL: srcdir is not searchable: $srcdir\n";
 	exit(23);
     }
 
@@ -418,7 +542,7 @@ sub dir_setup()
     #
     ($errcode, $errmsg) = form_dir($destdir);
     if ($errcode != 0) {
-	print STDERR "$0: mkdir error: $errmsg for $destdir\n";
+	print STDERR "$0: FATAL: destdir mkdir error: $errmsg for $destdir\n";
 	exit(24);
     }
 
@@ -426,7 +550,48 @@ sub dir_setup()
     #
     ($destdev, $destino,) = stat($destdir);
 
-    XXX - create directories for our pathsets
+    # create, if needed, all the required sub-directories under destdir
+    #
+    for $path ( keys %path_basenoext ) {
+
+	# get the 3 subdir levels
+	#
+	# NOTE: In the case of the -r readme.txt file, we the roll_sub will
+	#	be undef and $dir3 will be undef because that file will
+	#	do under just $destdir/$dir1/$dir2.
+	#
+	($dir1, $dir2, $dir3) = destdir_path(
+	    $pathset_timestamp{$path_basenoext{$path}},
+	    $rollnum,
+	    $path_roll_sub{$path});
+
+	# add the 3 paths to the set of directories to check
+	#
+	push($need_subdir, $dir1, "$dir1/$dir2");
+	if (defined $dir3) {
+	    push($need_subdir, "$dir1/$dir2/$dir3");
+	    $path_destdir{$path} = "$dir1/$dir2/$dir3";
+	} else {
+	    $path_destdir{$path} = "$dir1/$dir2";
+	}
+	print "DEBUG: destination of $path is $path_destdir{$path}\n"
+	  if $opt_v > 2;
+    }
+
+    # now form all of the required destdir subdirs
+    #
+    $err = 0;
+    foreach $path ( sort @need_subdir ) {
+    	($errcode, $errmsg) = form_dir("$desitdir/$path");
+	if ($errcode != 0) {
+	    print STDERR "$0: FATAL: subdir mkdir error: $errmsg ",
+	        "for $destdir/path\n";
+	    $err = 25;	# delayed exit
+	}
+    }
+    if ($err != 0) {
+	exit($err);
+    }
     return;
 }
 
@@ -454,6 +619,20 @@ sub dir_setup()
 # $basenoext_pathset{$path} will be an array with 2 or more elements.
 # If $need_plus{$path} == 0, then $basenoext_pathset{$path} will be
 # an array with just 1 element.
+#
+# We maintain a file timestamp for each path to a file.  This
+# timestamp is usually the file create time or file modification time,
+# which ever is older.  When selecting the older of create and mod times,
+# we ignore those that are older than the minimum timestamp (which is
+# Tue Nov  5 00:53:20 1985 UTC).  If both are older than the minimum
+# timestamp, we use the older non-zero timestamp.  If both the create
+# and modify times are 0, we give up and use 0 as the file timestamp.
+# Note that later on elsewhere, files with valid EXIF timestamps will
+# override their file timestamps.
+#
+# We maintain a roll number sub-directory string in %path_roll_sub.  The
+# roll_sub # is the basename of the directory in which the file was found.
+# It will be used to form destination directories and filenames.
 #
 ####
 #
@@ -527,6 +706,7 @@ sub wanted($)
     my $ino;			# inode number
     my $mtime;			# modify timestamp
     my $ctime;			# create timestamp
+    my $roll_sub;		# roll-subdir
 
     # canonicalize the path by removing leading ./'s, multiple //'s
     # and trailing /'s
@@ -536,13 +716,20 @@ sub wanted($)
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
     $pathname =~ s|(.)/+$|$1|;
+    if ($pathname =~ /$untaint/o) {
+    	$pathname = $1;
+    } else {
+	print "DEBUG: tainted filename prune #1 $pathname\n" if $opt_v > 0;
+	$File::Find::prune = 1;
+	return;
+    }
     print "DEBUG: pathname: $pathname\n" if $opt_v > 4;
 
     # prune out anything that is not a directory
     #
     if (! -d $file) {
 	# skip non-dir/non-files
-	print "DEBUG: non-directory prune #1 $pathname\n" if $opt_v > 4;
+	print "DEBUG: non-directory prune #2 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -560,7 +747,7 @@ sub wanted($)
     }
     if ($pathname eq "$srcdir/comstate.tof") {
 	# skip this useless camera node
-	print "DEBUG: comstate.tof prune #3 $pathname\n" if $opt_v > 4;
+	print "DEBUG: comstate.tof prune #4 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -569,7 +756,7 @@ sub wanted($)
     #
     if ($file eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	print "DEBUG: .DS_Store prune #4 $pathname\n" if $opt_v > 4;
+	print "DEBUG: .DS_Store prune #5 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -578,7 +765,7 @@ sub wanted($)
     #
     if ($file =~ /.Trashes$/) {
 	# skip OS X .DS_Store files
-	print "DEBUG: *.Trashes prune #5 $pathname\n" if $opt_v > 4;
+	print "DEBUG: *.Trashes prune #6 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -587,7 +774,7 @@ sub wanted($)
     #
     if ($file =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	print "DEBUG: desktop prune #6 $pathname\n" if $opt_v > 4;
+	print "DEBUG: desktop prune #7 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -596,34 +783,16 @@ sub wanted($)
     #
     if ($file =~ /^\.Spotlight-/i) {
 	# skip Spotlight index directories
-	print "DEBUG: Spotlight prune #7 $pathname\n" if $opt_v > 4;
+	print "DEBUG: Spotlight prune #8 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
 
-    # ignore names that match common directories
-    #
-    if ($file eq ".") {
-	# ignore but do not prune directories
-	print "DEBUG: . ignore #8 $pathname\n" if $opt_v > 4;
-    	return;
-    }
-    if ($file eq "..") {
-	# ignore but do not prune directories
-	print "DEBUG: .. ignore #9 $pathname\n" if $opt_v > 4;
-    	return;
-    }
-    if ($file eq "DCIM") {
-	# ignore but do not prune directories
-	print "DEBUG: DCIM ignore #10 $pathname\n" if $opt_v > 4;
-    	return;
-    }
-
-    # prune out anything that start with . (we alerady processed . and ..)
+    # prune out anything that start with . except for . itself
     #
     if ($file =~ /^\../) {
 	# skip . files and dirs
-	print "DEBUG: dot-file/dir prune #11 $pathname\n" if $opt_v > 4;
+	print "DEBUG: dot-file/dir prune #12 $pathname\n" if $opt_v > 4;
 	$File::Find::prune = 1;
 	return;
     }
@@ -632,7 +801,7 @@ sub wanted($)
     #
     if (! -r $file) {
 	print STDERR "$0: FATAL: skipping non-readable directory: $pathname\n";
-	print "DEBUG: non-readable dir prune #12 $pathname\n" if $opt_v > 1;
+	print "DEBUG: non-readable dir prune #13 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(31) unless defined $opt_a;
 	return;
@@ -642,7 +811,7 @@ sub wanted($)
     #
     if (! opendir DIR,$file) {
 	print STDERR "$0: FATAL: opendir failed on: $pathname: $!\n";
-	print "DEBUG: opendir error prune #13 $pathname\n" if $opt_v > 1;
+	print "DEBUG: opendir error prune #14 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(32) unless defined $opt_a;
 	return;
@@ -696,7 +865,7 @@ sub wanted($)
 	if (! defined $dev || ! defined $ino ||
 	    ! defined $mtime || ! defined $ctime) {
 	    print STDERR "$0: FATAL: stat failed for: $path: $!\n";
-	    print "DEBUG: stat error prune #14 $path\n" if $opt_v > 1;
+	    print "DEBUG: stat error prune #15 $path\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(33) unless defined $opt_a;
 	    closedir DIR;
@@ -719,7 +888,7 @@ sub wanted($)
 	#
 	if (defined $path_basename{$path}) {
 	    print STDERR "$0: FATAL: duplicate name found: $path\n";
-	    print "DEBUG: duplicate prune #15 $pathname\n" if $opt_v > 1;
+	    print "DEBUG: duplicate prune #16 $pathname\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(34) unless defined $opt_a;
 	    closedir DIR;
@@ -730,7 +899,7 @@ sub wanted($)
 	#
 	if (defined $devino_path{"$dev/$ino"}) {
 	    print STDERR "$0: FATAL: dup dev/ino found: dev: $dev inum: $ino\n";
-	    print "DEBUG: duplicate prune #16 $path same file as ",
+	    print "DEBUG: duplicate prune #17 $path same file as ",
 	        "$devino_path{"$dev/$ino"}\n" if $opt_v > 1;
 	    $File::Find::prune = 1;
 	    exit(35) unless defined $opt_a;
@@ -746,6 +915,16 @@ sub wanted($)
 	# save the found basename w/o .ext
 	#
 	($basenoext = $entry) =~ s/\.[^.]*$//;
+	if ($basenoext eq "readme" && defined $opt_r) {
+	    print STDERR "$0: FATAL: -r was given found file with a basename ",
+	      " of readme (before any .extension)\n";
+	    print "DEBUG: duplicate prune #18 $path readme basename w/o ",
+	      ".extension: $path\n" if $opt_v > 1;
+	    $File::Find::prune = 1;
+	    exit(36) unless defined $opt_a;
+	    closedir DIR;
+	    return;
+	}
 	$path_basenoext{$path} = $basenoext;
 
 	# save the found device/inum for duplicate detection
@@ -791,6 +970,63 @@ sub wanted($)
 	} else {
 	    $path_filetime{$path} = 0;
 	}
+	print "DEBUG: file timestamp: $path_filetime{$path} for $path\n"
+	  if $opt_v > 4;
+
+	# calculate the roll_sub
+	#
+	# The roll_sub is the directory name, converted to lower case,
+	# under which we found this file.
+	#
+	# If the directory name is not usable, then the roll_sub will be "0".
+	# These are direftory names that are not usable
+	#
+	#	is dcim in any case
+	#	an empty string
+	#	contains only whitespace
+	#	contain a /
+	#	starts with a .
+	#	is the same as the top level directory (srcdir)
+	#
+	$roll_sub = lc(basename($pathname));
+	print "DEBUG: original lowercase roll_sub: $roll_sub\n" if $opt_v > 5;
+	if ($roll_sub =~ /^dcim$/) {
+	    print "DEBUG: converting DCIM roll_sub to 0\n" if $opt_v > 5;
+	    $roll_sub = "0";
+	} elsif ($roll_sub =~ /^\s*$/) {
+	    print "DEBUG: converting empty/blank roll_sub to 0\n" if $opt_v > 5;
+	    $roll_sub = "0";
+	} elsif ($roll_sub =~ /\//) {
+	    print "DEBUG: converting roll_sub with / to 0\n" if $opt_v > 5;
+	    $roll_sub = "0";
+	} elsif ($roll_sub =~ /^\./) {
+	    print "DEBUG: converting .-based roll_sub to 0\n" if $opt_v > 5;
+	    $roll_sub = "0";
+	} elsif ($dev == $File::Find::topdev && $ino == $File::Find::topino) {
+	    print "DEBUG: converting srcdir roll_sub to 0\n" if $opt_v > 5;
+	    $roll_sub = "0";
+	}
+
+	# We convert all -'s (dashed) in the roll_sub to _'s (underscores)
+	#
+	if ($roll_sub =~ /-/) {
+	    $roll_sub = s/-/_/g;
+	    print "DEBUG: changed all - to _ in roll_sub\n" if $opt_v > 5;
+	}
+
+	# We truncate the roll_sub to the first roll_sub_maxlen (which can be
+	# changed from the default by -s roll_sublen) if subdurchars is > 0.
+	# A 0 roll_sub_maxlen means we use the full roll_sub.
+	#
+	# We will skip the first roll_sub_skip chars (which can be changed from
+	# the defailt by -k roll_subskip).
+	#
+	$roll_sub = substr($roll_sub, $roll_sub_skip, $roll_sub_maxlen);
+
+	# save the final roll_sub
+	#
+	print "DEBUG: using roll_sub: $roll_sub\n" if $opt_v > 4;
+	$path_roll_sub{$path} = $roll_sub;
     }
 
     # cleanup
@@ -1286,12 +1522,15 @@ sub form_dir($)
         if (! mkdir($dir_name, 0775)) {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
 	    return (81, "cannot mkdir");	# exit(81)
-	} elsif (! -w $dir_name) {
-	    print STDERR "$0: directory is not writable: $dir_name\n";
-	    return (82, "directory is not writable");	# exit(82)
 	}
     }
+    if (! -w $dir_name) {
+	print STDERR "$0: directory is not writable: $dir_name\n";
+	return (82, "directory is not writable");	# exit(82)
+    }
+
     # all is OK
+    #
     return (0, undef);
 }
 
@@ -1396,6 +1635,8 @@ sub roll_setup()
 # returns:
 #	absolute path of the readme file
 #
+# NOTE: This function also sets the global $readme_timestamp value.
+#
 # NOTE: This function exits if there are any problems.
 #
 # NOTE: This function is expected to be called from main
@@ -1431,6 +1672,10 @@ sub readme_check($)
 	print STDERR "$0: try adding '# date: yyyy-mm-dd' line to $readme\n";
 	exit(103);
     }
+
+    # same the timestamp for later
+    #
+    $readme_timestamp = $message;
 
     # determine absolute path of readme
     #
@@ -1834,7 +2079,7 @@ sub old_wanted($)	# XXX - remove when code complete
     #
     #	Next we canonicalize the roll_sub by converting to lower case,
     #	replace -'s (dashes) with _'s (underscores), and by truncating
-    #	to the first "-s sdirlen" chars.
+    #	to the first "-s roll_sublen" chars.
     #
     #   Finally we prepend the roll number follow by a - (dash).
     #
@@ -1878,7 +2123,7 @@ sub old_wanted($)	# XXX - remove when code complete
     $roll_sub =~ tr/[A-Z]/[a-z]/;	# conver to lower case
     $roll_sub = "" if ($roll_sub eq "dcim");
     $roll_sub =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
-    $roll_sub = substr($roll_sub, 0, $subdirchars) if $subdirchars > 0;
+    $roll_sub = substr($roll_sub, 0, $roll_sub_maxlen) if $roll_sub_maxlen > 0;
     $roll_sub = "$rollnum-$roll_sub";
     print "DEBUG: roll_sub name: $roll_sub\n" if $opt_v > 2;
 
