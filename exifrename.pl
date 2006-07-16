@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.8 $
-# @(#) $Id: exifrename.pl,v 2.8 2006/07/16 20:14:13 chongo Exp chongo $
+# @(#) $Revision: 3.1 $
+# @(#) $Id: exifrename.pl,v 3.1 2006/07/16 21:44:57 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.8 $, 10;
+my $VERSION = substr q$Revision: 3.1 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -121,7 +121,7 @@ my @exif_ext = qw(
 #
 # $basenoext_pathset{$basenoext}
 #	key: basename of $path w/o .ext
-#	value: array of paths with dup base w/o .ext
+#	value: array of paths with the same base w/o .ext
 #
 # $pathset_timestamp{$basenoext}
 #	key: basename of $path w/o .ext
@@ -215,7 +215,7 @@ sub text_date($);
 sub form_dir($);
 sub roll_setup();
 sub readme_check($);
-sub create_destitnation();
+sub create_destination();
 
 
 # setup
@@ -297,13 +297,13 @@ MAIN:
     #
     dir_setup();
 
-    # determine desitnation filenames
+    # determine destination filenames
     #
     set_destname();
 
     # copy or more src files to destination files
     #
-    create_destitnation();
+    create_destination();
 
     # all done
     #
@@ -623,7 +623,7 @@ sub dir_setup()
     	($errcode, $errmsg) = form_dir("$destdir/$path");
 	if ($errcode != 0) {
 	    print STDERR "$0: FATAL: subdir mkdir error: $errmsg ",
-	        "for $destdir/path\n";
+	        "for $destdir/$path\n";
 	    $err = 35;	# delayed exit(35);
 	}
     }
@@ -753,7 +753,8 @@ sub wanted($)
     if ($pathname =~ /$untaint/o) {
     	$pathname = $1;
     } else {
-	print "Debug: tainted filename prune #1 $pathname\n" if $opt_v > 0;
+	print STDERR "$0: WARNING: tainted filename prune #1 ",
+	    "$pathname\n" if $opt_v > 0;
 	$File::Find::prune = 1;
 	return;
     }
@@ -835,7 +836,7 @@ sub wanted($)
     #
     if (! -r $file) {
 	print STDERR "$0: FATAL: skipping non-readable directory: $pathname\n";
-	print "WARNING: non-readable dir prune #13 $pathname\n" if $opt_v > 1;
+	print "Debug: non-readable dir prune #13 $pathname\n" if $opt_v > 1;
 	$File::Find::prune = 1;
 	exit(40) unless defined $opt_a;
 	return;
@@ -883,8 +884,8 @@ sub wanted($)
 	# ignore any non-readable file
 	#
 	if (! -r $path) {
-	    print "Debug: in $pathname ignoring non-readable: $entry\n"
-	      if $opt_v > 5;
+	    print STDERR "$0: WARNING: in $pathname ignoring non-readable: ",
+	        "$entry\n" if $opt_v > 0;
 	    next;
 	}
 
@@ -899,11 +900,8 @@ sub wanted($)
 	if (! defined $dev || ! defined $ino ||
 	    ! defined $mtime || ! defined $ctime) {
 	    print STDERR "$0: FATAL: stat failed for: $path: $!\n";
-	    print "Debug: stat error prune #15 $path\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(42) unless defined $opt_a;
-	    closedir DIR;
-	    return;
+	    print "Debug: stat error skip file #15 $path\n" if $opt_v > 1;
+	    next;
 	}
 
 	# ignore if we happen to find the -r readme.txt file
@@ -913,21 +911,20 @@ sub wanted($)
 	#
 	if (defined $readme_dev && $dev == $readme_dev &&
 	    defined $readme_ino && $ino == $readme_ino) {
-	    print "Debug: in $pathname -r readme file, will later ",
-	      "add: $entry\n" if $opt_v > 6;
+	    print "Debug: for now, skipping -r readme file: $pathname/#entry"
+	      if $opt_v > 6;
+	    print "Debug: readme skip file #16 $path\n" if $opt_v > 1;
 	    next;
 	}
 
 	# firewall - must not have seen this device/inode number combo before
 	#
 	if (defined $devino_path{"$dev/$ino"}) {
-	    print STDERR "$0: FATAL: dup dev/ino found: dev: $dev inum: $ino\n";
-	    print "Debug: duplicate prune #17 $path same file as ",
+	    print STDERR "$0: WARNING: dup dev/ino found: ",
+	       "dev: $dev inum: $ino\n";
+	    print "Debug: duplicate skip #17 $path same file as ",
 	        "$devino_path{$dev/$ino}\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(43) unless defined $opt_a;
-	    closedir DIR;
-	    return;
+	    next;
 	}
 	print "Debug: recording information about $path\n" if $opt_v > 3;
 
@@ -935,14 +932,11 @@ sub wanted($)
 	#
 	($basenoext = $entry) =~ s/\.[^.]*$//;
 	if ($basenoext eq "readme" && defined $opt_r) {
-	    print STDERR "$0: FATAL: -r was given found file with a basename ",
-	      " of readme (before any .extension)\n";
+	    print STDERR "$0: WARNING: -r was given found file with a ",
+	    	"basename of readme (w/o .extension)\n" if $opt_v > 0;
 	    print "Debug: duplicate prune #18 $path readme basename w/o ",
-	      ".extension: $path\n" if $opt_v > 1;
-	    $File::Find::prune = 1;
-	    exit(44) unless defined $opt_a;
-	    closedir DIR;
-	    return;
+	    	".extension: $path\n" if $opt_v > 1;
+	    next;
 	}
 	$path_basenoext{$path} = $basenoext;
 
@@ -1000,7 +994,7 @@ sub wanted($)
 	# If the directory name is not usable, then the roll_sub will be "0".
 	# These are directory names that are not usable
 	#
-	#	is dcim in any case
+	#	is DCIM in any case
 	#	an empty string
 	#	contains only whitespace
 	#	contain a /
@@ -1081,7 +1075,7 @@ sub wanted($)
 #	/121525+5627-45-200505-043-101-pg5v.cr2	# image filename (see below)
 #
 # NOTE: The property of directory names under /destdir that they are
-#	unuqie  and standalone.  One can look at one of these sub-directories
+#	unique  and standalone.  One can look at one of these sub-directories
 #	and know where it belongs.  That is why the yyyymm and yyyymm-roll
 #	are repeated in the lower level directories.
 #
@@ -1116,7 +1110,7 @@ sub wanted($)
 #	- or +			# - ==> has no sound file, + has sound file
 #	5627			# image sequence number (see NOTE below)
 #	-			# (dash) separator
-#	45			# image second of minites, 2 digits [00-60]
+#	45			# image second of minutes, 2 digits [00-60]
 #	     _			# (underscore) optional for dups in same sec
 #	     1			# optional digits for dups in same sec
 #	-			# (dash) separator
@@ -1145,7 +1139,7 @@ sub wanted($)
 #	the filename.  This default not-used length can be changed by
 #	the -z skchars option.
 #
-#	If there are any remainng image filename chars beyond the sequence
+#	If there are any remaining image filename chars beyond the sequence
 #	number and before the .file extension, we put them after an _
 #	(underscore) character.
 #
@@ -1184,7 +1178,7 @@ sub wanted($)
 #
 # In addition to being able to process already renamed files, this
 # tool can deal with filenames that have been named with the previous
-# genreation of this tool.  These older filenames are of the form:
+# generation of this tool.  These older filenames are of the form:
 #
 #	999-999-99999999-999999-zzzz9999.xyz
 #
@@ -1256,7 +1250,10 @@ sub set_destname()
 	if ($srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
 	    print "Debug: found old style filename: $srcbase\n" if $opt_v > 2;
 	    $srcbase = $2;
-	    $srcbase =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+	    if ($srcbase =~ /-/) {
+		$srcbase = s/-/_/g;
+		print "Debug: conv -'s to _'s in old srcbase\n" if $opt_v > 4;
+	    }
 	    print "Debug: preconverted old style to: $srcbase\n" if $opt_v > 2;
 
 	# deal with filenames in the new style destination form
@@ -1284,17 +1281,21 @@ sub set_destname()
 			  [^-]*		# sub-roll number
 			  -		# - (dash) separator
 			  ([^_.]*)	# $3: image filename chars before seqnum
-			  (_[^.]*)?	# $4: optiinal imagename chars after seq
+			  (_[^.]*)?	# $4: optional imagename chars after seq
 			  (\..*)?$	# $5: optional .extension
     			 }ix) {
 	    print "Debug: found new style filename: $srcbase\n" if $opt_v > 2;
 	    $srcbase = $3 . $1 . substr($4, 1) . $5;
-	    $srcbase =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+	    if ($srcbase =~ /-/) {
+		$srcbase = s/-/_/g;
+		print "Debug: conv -'s to _'s in new srcbase\n" if $opt_v > 4;
+	    }
 	    print "Debug: preconverted new style to: $srcbase\n" if $opt_v > 2;
 
 	# -'s (dash) become _'s (underscore) to avoid filename field confusion
 	#
-	} else {
+	} elsif ($srcbase =~ /-/) {
+	    print "Debug: conv -'s to _'s in srcbase\n" if $opt_v > 4;
 	    $srcbase =~ s/-/_/g;
 	}
 
@@ -1916,8 +1917,9 @@ sub form_dir($)
 	return (90, "is a non-directory");	# exit(90)
     }
     if (! -d $dir_name) {
-	print "Debug: will try to mkdir: $dir_name\n" if $opt_v > 1;
-        if (! mkdir($dir_name, 0775)) {
+        if (mkdir($dir_name, 0775)) {
+	    print "Debug: mkdir $dir_name\n" if $opt_v > 0;
+	} else {
 	    print STDERR "$0: cannot mkdir: $dir_name: $!\n";
 	    return (91, "cannot mkdir");	# exit(91)
 	}
@@ -1989,8 +1991,10 @@ sub roll_setup()
 	# assume roll number of 000 if bad line or no line
 	#
 	if ($rollnum !~ /^\d{3}$/) {
-	    print STDERR "$0: WARNING: invalid roll number in $rollfile\n";
-	    print STDERR "$0: will use roll number 000 instead\n";
+	    print STDERR "$0: WARNING: invalid roll number in $rollfile\n"
+	      if $opt_v > 0;
+	    print STDERR "$0: WARNING: will use roll number 000 instead\n"
+	      if $opt_v > 0;
 	    $rollnum = "000";
 	}
     }
@@ -2087,7 +2091,7 @@ sub readme_check($)
 
 # create_destination - copy or move src files to their destinations
 #
-sub create_destitnation()
+sub create_destination()
 {
     my $err;		# >0 ==> fatal error number, 0 ==> OK
     my $destpath;	# full path to
@@ -2108,16 +2112,16 @@ sub create_destitnation()
 	    next;
 	}
 
-        # dertermine destination path
+        # determine destination path
 	#
 	if (! defined $path_destdir{$path}) {
 	    print STDERR "$0: FATAL: no destination directory info for: $path";
-	    $err = 121;	# delated exit(121)
+	    $err = 121;	# delayed exit(121)
 	    next;
 	}
 	if (! defined $path_destfile{$path}) {
 	    print STDERR "$0: FATAL: no destination filename info for: $path";
-	    $err = 122;	# delated exit(122)
+	    $err = 122;	# deflated exit(122)
 	    next;
 	}
 	$destpath = "$path_destdir{$path}/$path_destfile{$path}";
@@ -2134,7 +2138,7 @@ sub create_destitnation()
 	} else {
 	    if (copy($path, $destpath) == 0) {
 		print STDERR "$0: FATAL: cp $path $destpath failed: $!\n";
-		$err = 124;	# delated exit(124)
+		$err = 124;	# delayed exit(124)
 		next;
 	    }
 	    print "Debug: success: cp $path $destpath\n" if $opt_v > 2;
@@ -2145,7 +2149,7 @@ sub create_destitnation()
 	if (! defined $opt_m && compare($path, $destpath) != 0) {
 	    print STDERR "$0: FATAL: ",
 		"compare of $path and $destpath failed\n";
-	    $err = 125;	# delated exit(125)
+	    $err = 125;	# delayed exit(125)
 	    next;
 	}
 	if ($opt_v > 2 && ! defined $opt_m) {
