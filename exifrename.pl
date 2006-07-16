@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 2.6 $
-# @(#) $Id: exifrename.pl,v 2.6 2006/07/15 12:00:53 chongo Exp chongo $
+# @(#) $Revision: 2.7 $
+# @(#) $Id: exifrename.pl,v 2.7 2006/07/16 19:32:07 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 2.6 $, 10;
+my $VERSION = substr q$Revision: 2.7 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -157,8 +157,8 @@ my $mintime = 500000000;
 # usage and help
 #
 my $usage = "$0 [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n" .
-	"    [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
-	"    [-h] [-v lvl] srcdir destdir";
+    "    [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
+    "    [-h] [-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
     -a           don't abort/exit after post-setup fatal errors (def: do)
@@ -204,9 +204,10 @@ my %optctl = (
 # function prototypes
 #
 sub parse_args();
-sub wanted();
-sub dir_setup();
 sub destdir_path($$$);
+sub dir_setup();
+sub wanted();
+sub determine_destname();
 sub get_timestamp($);
 sub exif_date($);
 sub text_date($);
@@ -333,8 +334,9 @@ MAIN:
     #
     dir_setup();
 
-    # determine filenames
+    # determine desitnation filenames
     #
+    determine_destname();
 
     XXX - more code here
 
@@ -1054,6 +1056,243 @@ sub wanted($)
     closedir DIR;
     print "Debug: finished scanning dir: $pathname\n" if $opt_v > 3;
     return;
+}
+
+
+# determine_destname - determine the destination basenames
+#
+# Consider the a file under srcdir:
+#
+#	/srcdir/DCIM/101EOS1D/PV5V5627.CR2
+#
+# Assume that the EXIF timestamp (or file timestamp if if lacks
+# EXIF timestamp tags) is:
+#
+#	2005-05-12 15:25:45 UTC
+#
+# Then we will create the file:
+#
+#    /destdir/200505/2005005-043/200505-043-101/
+#		121525+5627-45-200505-043-101-pg5v.cr2
+#
+# The created file path is:
+#
+#	/destdir			# destdir path of image library
+#	/200505				# image year & month
+#	/200505-043			# image year & month, - (dash), roll
+#	/200505-043-010			# year & month, -, roll, -, roll-subdir
+#	/121525+5627-45-200505-043-101-pg5v.cr2	# image filename (see below)
+#
+# NOTE: The property of directory names under /destdir that they are
+#	unuqie  and standalone.  One can look at one of these sub-directories
+#	and know where it belongs.  That is why the yyyymm and yyyymm-roll
+#	are repeated in the lower level directories.
+#
+# NOTE: The property of a filename is that they completely define the
+#	directory path under whey they belong.  One can look at a filename
+#	and know where it belongs.
+#
+# NOTE: Another important property of a filename is that the original
+#	image filename can be re-constructed.  Consider these filenames:
+#
+#		121525+5627-45-200505-043-101-pg5v.cr2
+#		121525+5627-45_1-200505-043-101-pg5v_stuff.cr2
+#
+#	the original image filenames were:
+#
+#		PGV55627.CR2
+#		PGV55627STUFF.CR2
+#
+# Consider this filename:
+#
+#	121525+5627-45-200505-043-101-pg5v.cr2
+#
+# If another image was taken during the same second, that 2nd image becomes:
+#
+#	121525+5627-45_1-200505-043-101-pg5v.cr2
+#
+# is constructed out of the following:
+#
+#	12			# image day of month (UTC), 2 digits [01-31]
+#	15			# image hour (UTC), 2 digits [00-23]
+#	25			# image minute of hour (UTC), 2 digits [00-59]
+#	- or +			# - ==> has no sound file, + has sound file
+#	5627			# image sequence number (see NOTE below)
+#	-			# (dash) separator
+#	45			# image second of minites, 2 digits [00-60]
+#	     _			# (underscore) optional for dups in same sec
+#	     1			# optional digits for dups in same sec
+#	-			# (dash) separator
+#	2005			# image 4 digit Year (UTC)
+#	05			# image month (UTC), 2 digits [01-12]
+#	-			# (dash) separator
+#	043			# roll number, 3 digits, 0 padded
+#	-			# (dash) separator
+#	101			# optional subdir lead chars, w/o -'s lowercase
+#	-			# (dash) separator
+#	pg5v			# imagename w/o 5th-8th chars, lowercase no -'s
+#	    _			# (underscore) optional if trailing chars
+#	    rest		# optional trailing image filename chars
+#	.cr2			# .extension
+#
+# NOTE: The number of leading image filename chars between the UTC ddhhmm- and
+#	the -ss, defaults to 4 characters.  The default length can be changed
+#	by the -y seqlen option.  These chars come from the image filename
+#	after it has been lower cased and had -'s removed AND the initial
+#	image filename chars (which also defaults to 4 and may be changed
+#	by the -z skchars option) have been skipped.
+#
+#	By default, the 1st 4 chars of the image filename are not used as part
+#	of the image sequence number.  These initial image filename characters
+#	are usually fixed for a given camera and are left on the end of
+#	the filename.  This default not-used length can be changed by
+#	the -z skchars option.
+#
+#	If there are any remainng image filename chars beyond the sequence
+#	number and before the .file extension, we put them after an _
+#	(underscore) character.
+#
+#	A typical Canon EOS 1D Mark II N image filename:
+#
+#		pg5v5627.cr2
+#
+#	would, by default, have its chars moved into a filename of this form:
+#
+#		dddhhmm-5627-...-pg5v.cr2
+#
+#	The image filename:
+#
+#		LLLLnnnnXyzzy.ext
+#
+#	would, by default, have its chars moved into a filename of this form:
+#
+#		ddhhmm-nnnn-....-LLLL_Xyzzy.ext
+#
+#	The image filename:
+#
+#		LLLnnnnnWh-ey.ext
+#
+#	with -y 5 -z 3 would produce a filename of this form:
+#
+#		ddhhmm-nnnnn-....-LLL_Whey.ext
+#
+####
+#
+# If we encounter a srcfile that is already in destination filename
+# form, we convert it back to the original form before forming a
+# destination filename again.  This prevents our destination filenames
+# from growing very long if we were run the command over the
+# same tree.  In fact, by doing this we can rerun this tool over
+# the same tree without any ill effects.
+#
+# In addition to being able to process already renamed files, this
+# tool can deal with filenames that have been named with the previous
+# genreation of this tool.  These older filenames are of the form:
+#
+#	999-999-99999999-999999-zzzz9999.xyz
+#
+# Example: If the lowercase name is already of the form:
+#
+#	121525+5627-45-200505-043-101-pg5v.cr2
+#	121526+5628-45_1-200505-043-101-pg5v.cr2
+#	043-101-20050512-152745-ls1f5629.cr2
+#	043-101-20050512-152845_1-ls1f5630.cr2
+#
+# we convert it back to:
+#
+#	pg5v5627.cr2
+#	pg5v5628.cr2
+#	ls1f5629.cr2
+#	ls1f5630.cr2
+#
+# This is so that we won't keep adding date strings, roll numbers, etc
+# to files that already have them.
+#
+# Also filenames of the form:
+#
+#	121525+5631-45-200505-043-101-pg5v_stuff.cr2
+#	121525+5632-45_1-200505-043-101-pg5v_stuff.cr2
+#
+# are converted into:
+#
+#	pg5v5631stuff.cr2
+#	pg5v5632stuff.cr2
+#
+# as well.
+#
+sub determine_destname()
+{
+    my $path;		# a path in the pathset
+    my $srcbase;	# basename of the source path
+    my $destbase;	# basename of the destination path
+
+    # process all paths
+    #
+    foreach $path ( keys %path_basenoext ) {
+
+	# get the basename of the source path in lowercase
+	#
+	$srcbase = lc(basename($path));
+
+	# deal with filenames in old style destination form
+	#
+	# If the lowercase name is already of the form:
+	#
+	#	043-101-20050512-152545-ls1f5629.cr2
+	#	043-101-20050512-152545_1-ls1f5630.cr2
+	#
+	# convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
+	# reprocess the destination tree if we want to later on.
+	#
+	if ($srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+	    print "Debug: found old style filename: $srcbase\n" if $opt_v > 2;
+	    $srcbase = $2;
+	    $srcbase =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+	    print "Debug: preconverted old style to: $srcbase\n" if $opt_v > 2;
+
+	# deal with filenames in the new style destination form
+	#
+	# If the lowercase name is already of the form:
+	#
+	#	121525+5627-45-200505-043-101-pg5v.cr2
+	#	121526+5628-45_1-200505-043-101-pg5v.cr2
+	#
+	# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
+	# reprocess the destination tree if we want to later on.
+	#
+	} elsif ($srcbase =~
+			m{
+    			  \d{6}		# ddmmhh
+			  [-+]		# - (dash) or + (plus) separator
+			  ([^-]*)	# $1: sequence number
+			  -		# - (dash) separator
+			  \d{2}		# ss
+			  (_\d+)?	# $2: opt digits for dups in same sec
+			  \d{6}		# yyyymm
+			  -		# - (dash) separator
+			  [^-]*		# roll number
+			  -		# - (dash) separator
+			  [^-]*		# sub-roll number
+			  -		# - (dash) separator
+			  ([^_.]*)	# $3: image filename chars before seqnum
+			  (_[^.]*)?	# $4: optiinal imagename chars after seq
+			  (\..*)?$	# $5: optional .extension
+    			 }ix) {
+	    print "Debug: found new style filename: $srcbase\n" if $opt_v > 2;
+	    $srcbase = $3 . $1 . substr($4, 1) . $5;
+	    $srcbase =~ s/-/_/g;	# -'s (dash) become _'s (underscore)
+	    print "Debug: preconverted new style to: $srcbase\n" if $opt_v > 2;
+
+	# -'s (dash) become _'s (underscore) to avoid filename field confusion
+	#
+	} else {
+	    $srcbase =~ s/-/_/g;
+	}
+
+	# form the new destination filename
+	#
+	$path_destfile = XXX
+    }
 }
 
 
