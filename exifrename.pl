@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.2 $
-# @(#) $Id: exifrename.pl,v 3.2 2006/07/16 22:12:04 chongo Exp chongo $
+# @(#) $Revision: 3.3 $
+# @(#) $Id: exifrename.pl,v 3.3 2006/07/17 09:47:43 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.2 $, 10;
+my $VERSION = substr q$Revision: 3.3 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -215,14 +215,14 @@ sub destdir_path($$$);
 sub dir_setup();
 sub wanted();
 sub set_destname();
-sub get_timestamp($);
+sub get_timestamp($$);
 sub set_timestamps();
 sub exif_date($);
 sub text_date($);
 sub form_dir($);
 sub roll_setup();
-sub readme_check($);
 sub create_destination();
+sub readme_check($);
 sub warning($);
 sub error($$);
 sub dbg($$);
@@ -328,7 +328,7 @@ sub parse_args()
     #
     if (!GetOptions(%optctl)) {
 	print STDERR "$0: usage: $help\n";
-	fatal(1, "invalid command line");
+	error(1, "invalid command line");
     }
     if (defined $opt_h) {
 	# just print help, no error
@@ -340,28 +340,28 @@ sub parse_args()
     #
     if (defined $opt_m && defined $opt_c) {
 	# cannot compare if we are moving
-	fatal(2, "-c (compare) conflicts with -m (move)");
+	error(2, "-c (compare) conflicts with -m (move)");
     }
     if (! defined $ARGV[0] || ! defined $ARGV[1]) {
-	fatal(3, "missing args\nusage:\n\t$help");
+	error(3, "missing args\nusage:\n\t$help");
     }
     if (defined $ARGV[2]) {
-	fatal(4, "too many args\nusage:\n\t$help");
+	error(4, "too many args\nusage:\n\t$help");
     }
     if (defined $opt_e && defined $opt_n) {
-	fatal(5, "-e exifroll conflicts with -n rollnum");
+	error(5, "-e exifroll conflicts with -n rollnum");
     }
     if (defined $opt_k && $opt_k < 0) {
-	fatal(6, "-k roll_subskip must be >= 0");
+	error(6, "-k roll_subskip must be >= 0");
     }
     if (defined $opt_s && $opt_s < 0) {
-	fatal(7, "-s roll_sublen must be >= 0");
+	error(7, "-s roll_sublen must be >= 0");
     }
     if (defined $opt_y && $opt_y < 0) {
-	fatal(8, "-y seqlen must be >= 0");
+	error(8, "-y seqlen must be >= 0");
     }
     if (defined $opt_z && $opt_z < 0) {
-	fatal(9, "-z skchars must be >= 0");
+	error(9, "-z skchars must be >= 0");
     }
 
     # set values based on options
@@ -387,6 +387,7 @@ sub parse_args()
     # verbose arg debug
     #
     dbg(1,
+      "options:" .
       (defined $opt_a ? " -a" : "") .
       (defined $opt_c ? " -c" : "") .
       (defined $opt_e ? " -e $opt_e" : "") .
@@ -395,11 +396,10 @@ sub parse_args()
       (defined $opt_m ? " -m" : "") .
       (defined $opt_n ? " -n $opt_n" : "") .
       (defined $opt_m ? " -o" : "") .
-      (defined $opt_n ? " -n $opt_n" : "") .
       (defined $opt_r ? " -r $opt_r" : "") .
       (defined $opt_s ? " -s $opt_s" : "") .
       (defined $opt_t ? " -t" : "") .
-      (defined $opt_y ? " -v $opt_v" : "") .
+      (defined $opt_v ? " -v $opt_v" : "") .
       (defined $opt_y ? " -y $opt_y" : "") .
       (defined $opt_z ? " -z $opt_z" : "") .
       " $srcdir $destdir");
@@ -433,19 +433,19 @@ sub parse_args()
 	dbg(1, "-r readme file is sane: $opt_r");
 	($readme_dev, $readme_ino,) = stat($readme_path);
 	if (! defined $readme_dev || ! defined $readme_ino) {
-	    fatal(10, "stat error on $readme_path: $!");
+	    error(10, "stat error on $readme_path: $!");
 	}
         if (!defined $readme_path) {
-	    fatal(11, "-r $opt_r but we have no readme_path");
+	    error(11, "-r $opt_r but we have no readme_path");
 	}
         if (!defined $readme_path) {
-	    fatal(12, "-r $opt_r but we have no readme_timestamp");
+	    error(12, "-r $opt_r but we have no readme_timestamp");
 	}
         if (!defined $readme_dev) {
-	    fatal(13, "-r $opt_r but we have no readme_dev");
+	    error(13, "-r $opt_r but we have no readme_dev");
 	}
         if (!defined $readme_ino) {
-	    fatal(14, "-r $opt_r but we have no readme_ino");
+	    error(14, "-r $opt_r but we have no readme_ino");
 	}
     }
 
@@ -454,17 +454,17 @@ sub parse_args()
     if ($srcdir =~ /$untaint/o) {
     	$srcdir = $1;
     } else {
-	fatal(15, "bogus chars in srcdir");
+	error(15, "bogus chars in srcdir");
     }
     if ($destdir =~ /$untaint/o) {
     	$destdir = $1;
     } else {
-	fatal(16, "bogus chars in destdir");
+	error(16, "bogus chars in destdir");
     }
     if ($rollfile =~ /$untaint/o) {
     	$rollfile = $1;
     } else {
-	fatal(17, "bogus chars in -e filename");
+	error(17, "bogus chars in -e filename");
     }
 }
 
@@ -498,7 +498,7 @@ sub destdir_path($$$)
     if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
 	$yyyymm = $1;
     } else {
-	fatal(20, "strange chars in yyyymm ", "for timestamp: $timestamp");
+	error(20, "strange chars in yyyymm for timestamp: $timestamp");
     }
 
     # firewall - untaint and sanity check roll number
@@ -506,12 +506,12 @@ sub destdir_path($$$)
     if ($roll =~ /$untaint_file/o) {
     	$roll = $1;
     } else {
-	fatal(21, "bogus chars in roll");
+	error(21, "bogus chars in roll");
     }
     if ($roll =~ /^\s*$/) {
-	fatal(22, "roll is empty or only has whitespace");
+	error(22, "roll is empty or only has whitespace");
     } elsif ($roll =~ /^\./) {
-	fatal(23, "roll start with a .");
+	error(23, "roll start with a .");
     }
 
     # firewall - untaint and sanity check roll_sub
@@ -520,12 +520,12 @@ sub destdir_path($$$)
 	if ($roll_sub =~ /$untaint_file/o) {
 	    $roll_sub = $1;
 	} else {
-	    fatal(24, "bogus chars in roll_sub");
+	    error(24, "bogus chars in roll_sub");
 	}
 	if ($roll_sub =~ /^\s*$/) {
-	    fatal(25, "roll_sub is empty or ", "only has whitespace");
+	    error(25, "roll_sub is empty or only has whitespace");
 	} elsif ($roll_sub =~ /^\./) {
-	    fatal(26, "roll_sub start with a .");
+	    error(26, "roll_sub start with a .");
 	}
     } else {
 	$roll_sub = undef;
@@ -564,23 +564,23 @@ sub dir_setup()
     # firewall - check for a sane srcdir
     #
     if (! -e $srcdir) {
-	fatal(30, "srcdir does not exist: $srcdir");
+	error(30, "srcdir does not exist: $srcdir");
     }
     if (! -d $srcdir) {
-	fatal(31, "srcdir is not a directory: $srcdir");
+	error(31, "srcdir is not a directory: $srcdir");
     }
     if (! -r $srcdir) {
-	fatal(32, "srcdir is not readable: $srcdir");
+	error(32, "srcdir is not readable: $srcdir");
     }
     if (! -x $srcdir) {
-	fatal(33, "srcdir is not searchable: $srcdir");
+	error(33, "srcdir is not searchable: $srcdir");
     }
 
     # setup the destination directory if needed
     #
     ($errcode, $errmsg) = form_dir($destdir);
     if ($errcode != 0) {
-	fatal(34, "destdir mkdir error: $errmsg for $destdir");
+	error(34, "destdir mkdir error: $errmsg for $destdir");
     }
 
     # record the device and inode number of $destdir
@@ -589,13 +589,13 @@ sub dir_setup()
 
     # create, if needed, all the required sub-directories under destdir
     #
-    for $path ( keys %path_basenoext ) {
+    for $path ( sort keys %path_basenoext ) {
 
 	# get the 3 subdir levels
 	#
 	# NOTE: In the case of the -r readme.txt file, we the roll_sub will
 	#	be undef and $dir3 will be undef because that file will
-	#	do under just $destdir/$dir1/$dir2.
+	#	do under just $destdir/$dir1-$dir2.
 	#
 	($dir1, $dir2, $dir3) = destdir_path(
 	    $pathset_timestamp{$path_basenoext{$path}},
@@ -604,14 +604,14 @@ sub dir_setup()
 
 	# add the 3 paths to the set of directories to check
 	#
-	push(@need_subdir, $dir1, "$dir1/$dir2");
 	if (defined $dir3) {
-	    push(@need_subdir, "$dir1/$dir2/$dir3");
-	    $path_destdir{$path} = "$dir1/$dir2/$dir3";
+	    push(@need_subdir, $dir1, "$dir1/$dir1-$dir2-$dir3");
+	    $path_destdir{$path} = "$dir1/$dir1-$dir2-$dir3";
 	} else {
-	    $path_destdir{$path} = "$dir1/$dir2";
+	    push(@need_subdir, $dir1, "$dir1/$dir1-$dir2");
+	    $path_destdir{$path} = "$dir1/$dir1-$dir2";
 	}
-	dbg(2, "destination of $path is $path_destdir{$path}");
+	dbg(3, "destination of $path is $path_destdir{$path}");
     }
 
     # now form all of the required destdir subdirs
@@ -744,8 +744,7 @@ sub wanted($)
     # canonicalize the path by removing leading ./'s, multiple //'s
     # and trailing /'s
     #
-    dbg(4, "in wanted(), file arg: $file");
-    dbg(4, "File::Find::name: $File::Find::name");
+    dbg(4, "in wanted(): $File::Find::name");
     ($pathname = $File::Find::name) =~ s|^(\./+)+||;
     $pathname =~ s|//+|/|g;
     $pathname =~ s|(.)/+$|$1|;
@@ -835,7 +834,7 @@ sub wanted($)
     if (! -r $file) {
 	dbg(1, "non-readable dir prune #13 $pathname");
 	$File::Find::prune = 1;
-	fatal(40, "skipping non-readable directory: $pathname")
+	error(40, "skipping non-readable directory: $pathname")
 	  unless defined $opt_a;
 	return;
     }
@@ -845,10 +844,10 @@ sub wanted($)
     if (! opendir DIR,$file) {
 	dbg(1, "opendir error prune #14 $pathname");
 	$File::Find::prune = 1;
-	fatal(41, "opendir failed on: $pathname: $!") unless defined $opt_a;
+	error(41, "opendir failed on: $pathname: $!") unless defined $opt_a;
 	return;
     }
-    dbg(2, "scanning directory for filenames: $pathname");
+    dbg(1, "scanning source directory: $pathname");
 
     # collect useful filenames from this open directory
     #
@@ -863,16 +862,15 @@ sub wanted($)
 	#
 	if ($entry =~ /\.tof$/i || $entry =~ /^desktop/i ||
 	    $entry =~ /\.Trashes$/i || $entry =~ /^\./) {
-	    dbg(6, "in $pathname ignoring name of: $entry");
+	    dbg(6, "under $pathname ignoring name of: $entry");
 	    next;
 	}
 	$path = "$pathname/$entry";
-	dbg(4, "found: $path");
 
 	# ignore any entry that is not a file
 	#
 	if (! -f $path) {
-	    dbg(6, "in $pathname ignoring non-file: $entry");
+	    dbg(6, "under $pathname ignoring non-file: $entry");
 	    next;
 	}
 
@@ -889,13 +887,14 @@ sub wanted($)
 	#	due to the above -f and -r tests.  Doing the stat now
 	#	rather than later saves on system calls.
 	#
+	dbg(4, "under $pathname found: $entry");
 	($dev, $ino, undef, undef, undef, undef, undef, undef,
 	 undef, $mtime, $ctime) = stat($path);
 	if (! defined $dev || ! defined $ino ||
 	    ! defined $mtime || ! defined $ctime) {
 	    dbg(1, "stat error skip file #15 $path");
 	    $File::Find::prune = 1;
-	    fatal(42, "stat failed for: $path $!") unless defined $opt_a;
+	    error(42, "stat failed for: $path $!") unless defined $opt_a;
 	    return;
 	}
 
@@ -919,7 +918,6 @@ sub wanted($)
 	           "$devino_path{$dev/$ino}");
 	    next;
 	}
-	dbg(3, "recording information about $path");
 
 	# save the found basename w/o .ext
 	#
@@ -931,6 +929,7 @@ sub wanted($)
 	           ".extension: $path");
 	    next;
 	}
+	dbg(3, "recording information about $path");
 	$path_basenoext{$path} = $basenoext;
 
 	# save the found device/inum for duplicate detection
@@ -945,11 +944,15 @@ sub wanted($)
 	    $need_plus{@{$basenoext_pathset{$basenoext}}[0]} = 1;
 	    # save this base w/o .ext in the pathset
 	    push(@{$basenoext_pathset{$basenoext}}, $path);
+	    dbg(5, "added $path to $basenoext pathset, pathset size: " .
+	    	   scalar(@{$basenoext_pathset{$basenoext}}));
 	} else {
 	    # not a dup (yet)
 	    $need_plus{$path} = 0;
 	    # save this base w/o .ext in the pathset
 	    push(@{$basenoext_pathset{$basenoext}}, $path);
+	    dbg(5, "added $path to new $basenoext pathset, pathset size: " .
+	    	   scalar(@{$basenoext_pathset{$basenoext}}));
 	}
 
 	# save the file timestamp
@@ -1030,7 +1033,7 @@ sub wanted($)
 
 	# save the final roll_sub
 	#
-	dbg(4, "using roll_sub: $roll_sub");
+	dbg(5, "using roll_sub: $roll_sub");
 	$path_roll_sub{$path} = $roll_sub;
     }
 
@@ -1207,6 +1210,7 @@ sub set_destname()
 {
     my $path;		# a path in the pathset
     my $srcbase;	# basename of the source path
+    my $lc_srcbase;	# lowercase basename of the source path
     my $destbase;	# basename of the destination path
     my $timestamp;	# EXIF or filename timestamp of OK, or error msg
     my $yyyymm;		# EXIF or filename timestamp year and month
@@ -1227,7 +1231,8 @@ sub set_destname()
 
 	# get the basename of the source path in lowercase
 	#
-	$srcbase = lc(basename($path));
+	$srcbase = basename($path);
+	$lc_srcbase = lc($srcbase);
 
 	# deal with filenames in old style destination form
 	#
@@ -1239,14 +1244,14 @@ sub set_destname()
 	# convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
 	# reprocess the destination tree if we want to later on.
 	#
-	if ($srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
-	    dbg(2, "found old style filename: $srcbase");
-	    $srcbase = $2;
-	    if ($srcbase =~ /-/) {
-		$srcbase = s/-/_/g;
+	if ($lc_srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+	    dbg(2, "found old style filename: $lc_srcbase");
+	    $lc_srcbase = $2;
+	    if ($lc_srcbase =~ /-/) {
+		$lc_srcbase = s/-/_/g;
 		dbg(4, "conv -'s to _'s in old srcbase");
 	    }
-	    dbg(2, "preconverted old style to: $srcbase");
+	    dbg(2, "preconverted old style to: $lc_srcbase");
 
 	# deal with filenames in the new style destination form
 	#
@@ -1258,7 +1263,7 @@ sub set_destname()
 	# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
 	# reprocess the destination tree if we want to later on.
 	#
-	} elsif ($srcbase =~
+	} elsif ($lc_srcbase =~
 			m{
     			  \d{6}	      # ddmmhh
 			  [-+]	      # - (dash) or + (plus) separator
@@ -1276,24 +1281,24 @@ sub set_destname()
 			  (_[^.]*)?   # $4: optional imagename chars after seq
 			  (\..*)?$    # $5: optional .extension
     			 }ix) {
-	    dbg(2, "found new style filename: $srcbase");
-	    $srcbase = $3 . $1 . substr($4, 1) . $5;
-	    if ($srcbase =~ /-/) {
-		$srcbase = s/-/_/g;
+	    dbg(2, "found new style filename: $lc_srcbase");
+	    $lc_srcbase = $3 . $1 . substr($4, 1) . $5;
+	    if ($lc_srcbase =~ /-/) {
+		$lc_srcbase = s/-/_/g;
 		dbg(4, "conv -'s to _'s in new srcbase");
 	    }
-	    dbg(2, "preconverted new style to: $srcbase");
+	    dbg(2, "preconverted new style to: $lc_srcbase");
 
 	# -'s (dash) become _'s (underscore) to avoid filename field confusion
 	#
-	} elsif ($srcbase =~ /-/) {
+	} elsif ($lc_srcbase =~ /-/) {
 	    dbg(4, "conv -'s to _'s in srcbase");
-	    $srcbase =~ s/-/_/g;
+	    $lc_srcbase =~ s/-/_/g;
 	}
 
 	# note the .extension, if any
 	#
-	($srcext = $srcbase) =~ s/^.*\././;
+	($srcext = $lc_srcbase) =~ s/^.*\././;
 
 	# get the timestamp for this path
 	#
@@ -1374,15 +1379,15 @@ sub set_destname()
 	#
 	$destbase = "$yyyymm";
 	$destbase .= ($multifound ? "+" : "-");
-	$destbase .= substr($srcbase, $mv_end_chars, $mv_fwd_chars);
-	$destbase .= "$ss-$yyyymm-$rollnum-";
+	$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
+	$destbase .= "-$ss-$yyyymm-$rollnum-";
 	$destbase .= substr($roll_sub, $roll_sub_skip, $roll_sub_maxlen);
 	$destbase .= "-";
-	$destbase .= substr($srcbase, 0, $mv_end_chars);
-	if (length($srcbase) >
+	$destbase .= substr($lc_srcbase, 0, $mv_end_chars);
+	if (length($lc_srcbase) >
 	    $mv_fwd_chars+$mv_end_chars+length($srcext)) {
 	    $destbase .= "_";
-	    $destbase .= substr($srcbase, $mv_fwd_chars+$mv_end_chars);
+	    $destbase .= substr($lc_srcbase, $mv_fwd_chars+$mv_end_chars);
 	} else {
 	    $destbase .= $srcext;
 	}
@@ -1417,22 +1422,22 @@ sub set_destname()
 	    #
 	    ++$dup;
 	    if ($dup >= $max_dup) {
-		fatal(-58, "unable to form a unique destination filename " .
+		error(-58, "unable to form a unique destination filename " .
  			   "for $destpath");
 	    	$err = 58;	# delay exit(58);
 		last;
 	    }
 	    $destbase = "$yyyymm";
 	    $destbase .= ($multifound ? "+" : "-");
-	    $destbase .= substr($srcbase, $mv_end_chars, $mv_fwd_chars);
-	    $destbase .= "${ss}_$dup-$yyyymm-$rollnum-";
+	    $destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
+	    $destbase .= "-${ss}_$dup-$yyyymm-$rollnum-";
 	    $destbase .= substr($roll_sub, $roll_sub_skip, $roll_sub_maxlen);
 	    $destbase .= "-";
-	    $destbase .= substr($srcbase, 0, $mv_end_chars);
-	    if (length($srcbase) >
+	    $destbase .= substr($lc_srcbase, 0, $mv_end_chars);
+	    if (length($lc_srcbase) >
 	        $mv_fwd_chars+$mv_end_chars+length($srcext)) {
 		$destbase .= "_";
-		$destbase .= substr($srcbase, $mv_fwd_chars+$mv_end_chars);
+		$destbase .= substr($lc_srcbase, $mv_fwd_chars+$mv_end_chars);
 	    } else {
 		$destbase .= $srcext;
 	    }
@@ -1458,15 +1463,16 @@ sub set_destname()
 # get_timestamp - determine the timestamp of EXIF or file dates
 #
 # given:
-#	\@pathset	array of paths to to check
+#	\@pathset 	    array of paths to to check
+#	$basename_noext	    pathset name
 #
 # returns:
 #	timestamp or
 #	undef ==> no valid EXIF timestamp and file timestamp(s) too old
 #
-sub get_timestamp($)
+sub get_timestamp($$)
 {
-    my ($pathset) = $_;		# get arg
+    my ($pathset, $basename_noext) = @_;		# get args
     my $path;		# a path in the pathset
     my $path_ext;	# .extension of a path in the pathset
     my $exitcode;	# 0 ==> OK, else ==> could not get an EXIF timestamp
@@ -1478,6 +1484,7 @@ sub get_timestamp($)
 
     # see which paths in pathset have .extensions that might have EXIF data
     #
+    dbg(5, "getting timestamp for pathset: $basename_noext");
     foreach $path ( @{$pathset} ) {
 	my $path_exit;	# the .ext of the path
 	my $has_exif_ext;  # 1 ==> an .ext that might have EXIF data, 0 ==> no
@@ -1493,6 +1500,7 @@ sub get_timestamp($)
 	    # see if path's .ext is an EXIF type extension
 	    if ($i eq $path_ext) {
 		$has_exif_ext = 1;
+		dbg(6, "found EXIF type extension: $path");
 		last;
 	    }
 	}
@@ -1513,11 +1521,11 @@ sub get_timestamp($)
 
 	    # it is OK to fail, but if we have a good time, track oldest
 	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest) {
-		dbg(3, "get_timestamp EXIF type: $path EXIF time: $message");
+		dbg(4, "get_timestamp EXIF type: $path EXIF time: $message");
 		$oldest = $message;
 		$oldest_exif = $path;
 	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest) {
-		dbg(3, "get_timestamp EXIF type: $path " .
+		dbg(4, "get_timestamp EXIF type: $path " .
 		       "older EXIF time: $message");
 	    } elsif ($exitcode != 0) {
 	        dbg(4, "exif_date error code $exitcode: $message");
@@ -1528,7 +1536,7 @@ sub get_timestamp($)
     # If we found EXIF timestamps, return the oldest timestamp
     #
     if ($oldest > 0) {
-	dbg(2, "EXIF type EXIF timestamp: $oldest for $oldest_exif");
+	dbg(3, "EXIF .extension EXIF timestamp: $oldest for $oldest_exif");
 	return $oldest;
     }
 
@@ -1548,12 +1556,12 @@ sub get_timestamp($)
 
 	    # it is OK to fail, but if we have a good time, track oldest
 	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest) {
-		dbg(3, "get_timestamp non-EXIF type: $path " .
+		dbg(4, "get_timestamp non-EXIF type: $path " .
 		       "EXIF time: $message");
 		$oldest = $message;
 		$oldest_exif = $path;
 	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest) {
-		dbg(3, "get_timestamp non-EXIF type: $path " .
+		dbg(4, "get_timestamp non-EXIF type: $path " .
 		       "older EXIF time: $message");
 	    }
 	}
@@ -1562,9 +1570,10 @@ sub get_timestamp($)
     # If we found EXIF timestamps, return the oldest timestamp
     #
     if ($oldest > 0) {
-	dbg(2, "non-EXIF type EXIF timestamp: $oldest for $oldest_exif");
+	dbg(3, "non-EXIF .extension EXIF timestamp: $oldest for $oldest_exif");
 	return $oldest;
     }
+    dbg(5, "found no valid EXIF timestamp for pathset: $basename_noext");
 
     # no EXIF timestamps in set, look for the oldest file timestamp that
     # is not too old
@@ -1583,12 +1592,13 @@ sub get_timestamp($)
     # If we found a file timestamp that is not too old, use the oldest
     #
     if ($oldest > 0) {
-	dbg(2, "file timestamp: $oldest for $oldest_exif");
+	dbg(3, "file timestamp: $oldest for $oldest_exif");
 	return $oldest;
     }
 
     # We have no EXIF timestamp and no file timestamp we can use
     #
+    dbg(4, "found no valid timestamp for pathset: $basename_noext");
     return undef;
 }
 
@@ -1603,20 +1613,24 @@ sub set_timestamps()
     # process each pathset and determine timestamps for each set
     #
     $err = 0;
-    foreach $basename_noext ( keys %basenoext_pathset ) {
+    foreach $basename_noext ( sort keys %basenoext_pathset ) {
 
 	# set the timestamp for this pathset
 	#
 	$pathset_timestamp{$basename_noext} =
-	  get_timestamp($basenoext_pathset{$basename_noext});
+	  get_timestamp($basenoext_pathset{$basename_noext}, $basename_noext);
 
 	# firewall
 	#
-	if (! defined $pathset_timestamp{$basename_noext}) {
+	if (defined $pathset_timestamp{$basename_noext}) {
+	    dbg(1, "pathset $basename_noext timestamp: " .
+	           gmtime($pathset_timestamp{$basename_noext}) . " UTC");
+	} else {
 	    error(-60, "no valid EXIF timestamp and file " .
 	    	       "timestamp(s) too old for pathset: $basename_noext");
 	    $err = 60;	# delayed exit(60);
 	    next;
+
 	}
     }
     exit($err) if ($err > 0);
@@ -1953,7 +1967,7 @@ sub form_dir($)
     }
     if (! -d $dir_name) {
         if (mkdir($dir_name, 0775)) {
-	    dbg(0, "mkdir $dir_name");
+	    dbg(1, "mkdir $dir_name");
 	} else {
 	    return (91, "cannot mkdir: $dir_name: $!");	# exit(91)
 	}
@@ -1985,7 +1999,7 @@ sub roll_setup()
 	# firewall - roll number must be 3 digits
 	#
 	if ($opt_n !~ /^\d{3}$/) {
-	    fatal(100, "roll number must be 3 digits");
+	    error(100, "roll number must be 3 digits");
 	}
 	$rollnum = $opt_n;
 	return;
@@ -1999,15 +2013,15 @@ sub roll_setup()
 	# firewall - must be readable
 	#
 	if (! -r $rollfile) {
-	    fatal(101, "cannot read exifroll file: $rollfile");
+	    error(101, "cannot read exifroll file: $rollfile");
 	} elsif (! -w $rollfile) {
-	    fatal(102, "cannot write exifroll file: $rollfile");
+	    error(102, "cannot write exifroll file: $rollfile");
 	}
 
 	# open ~/.exifroll file
 	#
 	if (! open EXIFROLL, '<', $rollfile) {
-	    fatal(103, "cannot open for reading exifroll: ", "$rollfile: $!");
+	    error(103, "cannot open for reading exifroll: $rollfile: $!");
 	}
 
 	# read only the first line
@@ -2029,22 +2043,121 @@ sub roll_setup()
     #
     dbg(0, "will use roll number: $rollnum");
     if (! open EXIFROLL, '>', $rollfile) {
-	fatal(104, "cannot open for writing exifroll: $rollfile: $!");
+	error(104, "cannot open for writing exifroll: $rollfile: $!");
     }
     if ($rollnum > 999) {
 	if (! print EXIFROLL "000\n") {
 	    dbg(1, "next roll number will be 000");
 	} else {
-	    fatal(105, "cannot write 000 rollnum to exifroll: $rollfile: $!");
+	    error(105, "cannot write 000 rollnum to exifroll: $rollfile: $!");
 	}
     } else {
 	if (printf EXIFROLL "%03d\n", $rollnum+1) {
 	    dbg(1, "next roll number will be %03d" . ($rollnum+1));
 	} else {
-	    fatal(106, "cannot write next rollnum to exifroll: $rollfile: $!");
+	    error(106, "cannot write next rollnum to exifroll: $rollfile: $!");
 	}
     }
     close EXIFROLL;
+    return;
+}
+
+# create_destination - copy or move src files to their destinations
+#
+sub create_destination()
+{
+    my $err;		# >0 ==> fatal error number, 0 ==> OK
+    my $destpath;	# full path to
+    my $path;		# source path
+    my $timestamp;	# EXIF or filename timestamp of OK, or error msg
+
+    # process all source paths
+    #
+    $err = 0;
+    foreach $path ( sort keys %path_basenoext ) {
+
+	# get the timestamp for this path
+	#
+	$timestamp = $pathset_timestamp{$path_basenoext{$path}};
+	if (! defined $timestamp) {
+	    error(-110, "timestamp not found for: $path");
+	    $err = 110;	# delay exit(110)
+	    next;
+	}
+
+        # determine destination path
+	#
+	if (! defined $path_destdir{$path}) {
+	    error(-111, "no destination directory info for: $path");
+	    $err = 111;	# delayed exit(111)
+	    next;
+	}
+	if (! defined $path_destfile{$path}) {
+	    error(-112, "no destination filename info for: $path");
+	    $err = 112;	# delayed exit(112)
+	    next;
+	}
+	$destpath = "$path_destdir{$path}/$path_destfile{$path}";
+
+	# untaint source filename
+	#
+	if ($path =~ /$untaint/o) {
+	    $path = $1;
+	} else {
+	    error(-113, "bogus chars in source path");
+	    $err = 113;	# delayed exit(113)
+	}
+
+	# untaint destination filename
+	#
+	if ($destpath =~ /$untaint/o) {
+	    $destpath = $1;
+	} else {
+	    error(-114, "bogus chars in destination path");
+	    $err = 114;	# delayed exit(114)
+	}
+
+	# copy (or move of -m) the image file
+	#
+	if (defined $opt_m) {
+	    if (move($path, "$destdir/$destpath") == 0) {
+		error(-115, "mv $path $destdir/$destpath failed: $!");
+		$err = 115;	# delated exit(115)
+		next;
+	    }
+	    dbg(3, "success: mv $path $destdir/$destpath");
+	} else {
+	    if (copy($path, "$destdir/$destpath") == 0) {
+		error(-116, "cp $path $destdir/$destpath failed: $!");
+		$err = 116;	# delayed exit(116)
+		next;
+	    }
+	    dbg(3, "success: cp $path $destdir/$destpath");
+	}
+
+	# compare unless -m
+	#
+	if (! defined $opt_m && compare($path, "$destdir/$destpath") != 0) {
+	    error(-117, "compare of $path and $destdir/$destpath failed");
+	    $err = 117;	# delayed exit(117)
+	    next;
+	}
+	if (! defined $opt_m) {
+	    dbg(3, "success: cmp $path $destdir/$destpath");
+	}
+
+	# set the access and modification time unless -t
+	#
+	if (! defined $opt_t) {
+	    if (utime $timestamp, $timestamp, "$destdir/$destpath" < 1) {
+		error(-118, "compare of $path and $destdir/$destpath failed");
+		$err = 118;	# delayed exit(118)
+		next;
+	    }
+	}
+	dbg(1, "created: $destpath");
+    }
+    exit($err) if ($err != 0);
     return;
 }
 
@@ -2074,21 +2187,21 @@ sub readme_check($)
     # -r $readme file must be a readable file
     #
     if (! -e $readme) {
-	fatal(110, "-r $readme does not exist");
+	error(120, "-r $readme does not exist");
     }
     if (! -f $readme) {
-	fatal(111, "-r $readme is not a file");
+	error(121, "-r $readme is not a file");
     }
     if (! -r $readme) {
-	fatal(112, "-r $readme is not readable");
+	error(122, "-r $readme is not readable");
     }
 
     # must have a text date
     #
     ($exitcode, $message) = text_date($readme);
     if ($exitcode != 0) {
-	fatal(-113, "-r $readme does not have a date timestamp line");
-	fatal(113,  "try adding '# date: yyyy-mm-dd' line to $readme");
+	error(-123, "-r $readme does not have a date timestamp line");
+	error(123,  "try adding '# date: yyyy-mm-dd' line to $readme");
     }
 
     # same the timestamp for later
@@ -2099,86 +2212,9 @@ sub readme_check($)
     #
     $ret = abs_path($readme);
     if (! defined $ret) {
-	fatal(114, "cannot determine absolute path of $readme");
+	error(124, "cannot determine absolute path of $readme");
     }
     return $ret;
-}
-
-# create_destination - copy or move src files to their destinations
-#
-sub create_destination()
-{
-    my $err;		# >0 ==> fatal error number, 0 ==> OK
-    my $destpath;	# full path to
-    my $path;		# source path
-    my $timestamp;	# EXIF or filename timestamp of OK, or error msg
-
-    # process all source paths
-    #
-    $err = 0;
-    foreach $path ( keys %path_basenoext ) {
-
-	# get the timestamp for this path
-	#
-	$timestamp = $pathset_timestamp{$path_basenoext{$path}};
-	if (! defined $timestamp) {
-	    error(-120, "timestamp not found for: $path");
-	    $err = 120;	# delay exit(120)
-	    next;
-	}
-
-        # determine destination path
-	#
-	if (! defined $path_destdir{$path}) {
-	    error(-121, "no destination directory info for: $path");
-	    $err = 121;	# delayed exit(121)
-	    next;
-	}
-	if (! defined $path_destfile{$path}) {
-	    error(-122, "no destination filename info for: $path");
-	    $err = 122;	# deflated exit(122)
-	    next;
-	}
-	$destpath = "$path_destdir{$path}/$path_destfile{$path}";
-
-	# copy (or move of -m) the image file
-	#
-	if (defined $opt_m) {
-	    if (move($path, $destpath) == 0) {
-		error(-123, "mv $path $destpath failed: $!");
-		$err = 123;	# delated exit(123)
-		next;
-	    }
-	    dbg(2, "success: mv $path $destpath");
-	} else {
-	    if (copy($path, $destpath) == 0) {
-		error(-124, "cp $path $destpath failed: $!");
-		$err = 124;	# delayed exit(124)
-		next;
-	    }
-	    dbg(2, "success: cp $path $destpath");
-	}
-
-	# compare unless -m
-	#
-	if (! defined $opt_m && compare($path, $destpath) != 0) {
-	    error(-125, "compare of $path and $destpath failed");
-	    $err = 125;	# delayed exit(125)
-	    next;
-	}
-	if ($opt_v > 2 && ! defined $opt_m) {
-	    print "Debug: success: cmp $path $destpath\n";
-	}
-
-	# set the access and modification time unless -t
-	#
-	if (! defined $opt_t) {
-	    utime $timestamp, $timestamp, $destpath;
-	}
-	dbg(0, "processed: $destpath");
-    }
-    exit($err) if ($err != 0);
-    return;
 }
 
 
@@ -2246,6 +2282,62 @@ sub error($$)
 }
 
 
+# readme_check - check the -r readme filename given
+#
+# given:
+#	$readme		# -r readme file to check
+#
+# returns:
+#	absolute path of the readme file
+#
+# NOTE: This function also sets the global $readme_timestamp value.
+#
+# NOTE: This function exits if there are any problems.
+#
+# NOTE: This function is expected to be called from main
+#	soon after arg parsing.
+#
+sub readme_check($)
+{
+    my ($readme) = @_;		# get args
+    my $exitcode;		# return code from text_date
+    my $message;		# timestamp or error message
+    my $ret;			# absolute path of readme file
+
+    # -r $readme file must be a readable file
+    #
+    if (! -e $readme) {
+	error(110, "-r $readme does not exist");
+    }
+    if (! -f $readme) {
+	error(111, "-r $readme is not a file");
+    }
+    if (! -r $readme) {
+	error(112, "-r $readme is not readable");
+    }
+
+    # must have a text date
+    #
+    ($exitcode, $message) = text_date($readme);
+    if ($exitcode != 0) {
+	error(-113, "-r $readme does not have a date timestamp line");
+	error(113,  "try adding '# date: yyyy-mm-dd' line to $readme");
+    }
+
+    # same the timestamp for later
+    #
+    $readme_timestamp = $message;
+
+    # return the absolute path of readme
+    #
+    $ret = abs_path($readme);
+    if (! defined $ret) {
+	error(114, "cannot determine absolute path of $readme");
+    }
+    return $ret;
+}
+
+
 # dbg - print a debug message is debug level is high enough
 #
 # given:
@@ -2264,7 +2356,7 @@ sub dbg($$)
     if ($min_lvl =~ /\D/) {
     	error(98, "debug called with non-numeric debug level: $min_lvl");
     }
-    if ($opt_v <= $min_lvl) {
+    if ($opt_v < $min_lvl) {
 	return;
     }
     if (!defined $msg) {
