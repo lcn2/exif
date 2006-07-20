@@ -2,21 +2,21 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.3 $
-# @(#) $Id: exifrename.pl,v 3.3 2006/07/17 09:47:43 chongo Exp chongo $
+# @(#) $Revision: 3.4 $
+# @(#) $Id: exifrename.pl,v 3.4 2006/07/17 11:33:54 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
-# Copyright (c) 2005-2006 by Landon Curt Noll.  All Rights Reserved.
+# Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
 # provided that the above copyright, this permission notice and text
 # this comment, and the disclaimer below appear in all of the following:
 #
-#       supporting documentation
-#       source copies
-#       source works derived from this source
-#       binaries derived from this source or from derived source
+#	supporting documentation
+#	source copies
+#	source works derived from this source
+#	binaries derived from this source or from derived source
 #
 # LANDON CURT NOLL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
 # INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO
@@ -35,7 +35,7 @@
 use strict;
 use bytes;
 use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
-            $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k);
+	    $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k $opt_d);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.3 $, 10;
+my $VERSION = substr q$Revision: 3.4 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -61,8 +61,8 @@ my $destino;	# inode number of $destdir
 my $rollnum;	# EXIF roll number
 my $exiftool;	# Image::ExifTool object
 # NOTE: We will only cd into paths whose name is not tainted
-my $untaint = qr|^([-+\w\s./]+)$|; 	# untainting path pattern
-my $untaint_file = qr|^([-+\w\s.]+)$|; 	# untainting pattern w/o the /
+my $untaint = qr|^([-+\w\s./]+)$|;	# untainting path pattern
+my $untaint_file = qr|^([-+\w\s.]+)$|;	# untainting pattern w/o the /
 my $datelines = 16;	# date: must be in the 1st datelines of a file
 my %mname = (
     "Jan" => 0, "Feb" => 1, "Mar" => 2, "Apr" => 3, "May" => 4, "Jun" => 5,
@@ -77,7 +77,7 @@ my $readme_path = undef;	# if -r readme, this is the absolute src path
 my $readme_dev = undef;		# if -r readme, this is the device number
 my $readme_ino = undef;		# if -r readme, this is the inode number
 my $readme_timestamp = undef;	# if -r readme, this is its special timestamp
-my $max_dup = 100;		# max images with identical named & timestamps
+my $max_dup = 10;		# max images with identical named & timestamps
 
 
 # EXIF timestamp related tag names to look for
@@ -143,6 +143,12 @@ my @exif_ext = qw(
 #	NOTE: Used to detect destination collisions and the need for _x after
 #	      the UTC seconds to get a unique destination filename.
 #
+# $have_mkdir{$dir}
+#	key: directory to be made
+#	value: 1 ==> created, 0 ==> already exists
+#	NOTE: Useful in conjunction with -d to note when we might have
+#	      already created a directory.
+#
 my %path_basenoext;
 my %path_roll_sub;
 my %devino_path;
@@ -153,9 +159,10 @@ my %pathset_timestamp;
 my %path_destdir;
 my %path_destfile;
 my %destpath_path;
+my %have_mkdir;
 
 # timestamps prior to:
-#	Tue Nov  5 00:53:20 1985 UTC
+#	Tue Nov	 5 00:53:20 1985 UTC
 # are too old for an image with EXIF data.   See:
 #	perl -e 'my $x=500000000; print scalar gmtime($x), "\n";'
 #
@@ -164,36 +171,38 @@ my $mintime = 500000000;
 # usage and help
 #
 my $usage = "$0 [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n".
-    "    [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
-    "    [-h] [-v lvl] srcdir destdir";
+    "	 [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
+    "	 [-h] [-d] [-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
-    -a           don't abort/exit after post-setup fatal errors (def: do)
-    -c           don't verify/compare files after they are copied (def: do)
-    -e exifroll  read roll number from exifroll (def: ~/.exifroll)
+    -a		 don't abort/exit after post-setup fatal errors (def: do)
+    -c		 don't verify/compare files after they are copied (def: do)
+    -e exifroll	 read roll number from exifroll (def: ~/.exifroll)
     -k roll_subskip	 skip the leading roll_subskip chars (def: 0)
-    -m           move, do not copy files from srcdir to destdir (def: copy)
-    -n rollnum   roll is rollnum, don't update exifroll (def: use ~/exifroll)
-    -o           overwrite, don't add _# after time on duplicates (def: add)
-    -r readme    add readme as if it was srcdir/readme.txt (def: don't)
+    -m		 move, do not copy files from srcdir to destdir (def: copy)
+    -n rollnum	 roll is rollnum, don't update exifroll (def: use ~/exifroll)
+    -o		 overwrite, don't add _# after time on duplicates (def: add)
+    -r readme	 add readme as if it was srcdir/readme.txt (def: don't)
     -s roll_sublen	max length of roll_sub (def: 3, 0 ==> unlimited)
-    -t           don't touch modtime to match EXIF/file image (def: do)
-    -y seqlen    sequence length, image filename chars after skchars (def: 4)
-    -z skchars    initial image-name chars not part of sequence number (def: 4)
+    -t		 don't touch modtime to match EXIF/file image (def: do)
+    -y seqlen	 sequence length, image filename chars after skchars (def: 4)
+    -z skchars	 initial image-name chars not part of sequence number (def: 4)
 
-    -h           print this help message
-    -v lvl       set verbose / debug level to lvl (def: 0)
+    -h		 print this help message
+    -d		 do nothing / "dry run", do not create/alter any file (def: do)
+    -v lvl	 set verbose / debug level to lvl (def: 0)
 
-    srcdir       source directory
-    destdir      destination directory
+    srcdir	 source directory
+    destdir	 destination directory
 
-    NOTE: exit 0 means all is OK, exit >0 means some fatal error
+    NOTE: exit 0 means all is OK, exit !=0 means some fatal error
 
     Version: $VERSION};
 my %optctl = (
     "a" => \$opt_a,
-    "e=s" => \$opt_e,
     "c" => \$opt_c,
+    "d" => \$opt_d,
+    "e=s" => \$opt_e,
     "h" => \$opt_h,
     "k=i" => \$opt_k,
     "m" => \$opt_m,
@@ -287,13 +296,19 @@ MAIN:
     # add in readme.txt if -r readme was given
     #
     if ($opt_r) {
-	$path_basenoext{$readme_path} = "readme";
+	# XXX - the readreadme pathset is a hack and does not
+	#	deal well when -y and or -z change the defaults
+	#	We need to have a more readable readme filename
+	#	regardless of the -y and -z values.
+	$path_basenoext{$readme_path} = "readreadme";
 	$path_roll_sub{$readme_path} = undef;
 	$devino_path{"$readme_dev/$readme_ino"} = $readme_path;
 	$path_filetime{$readme_path} = $readme_timestamp;
 	$need_plus{$readme_path} = 0;
-	push(@{$basenoext_pathset{"readme"}}, $readme_path);
-	$pathset_timestamp{"readme"} = $readme_timestamp;
+	push(@{$basenoext_pathset{$path_basenoext{$readme_path}}},
+	     $readme_path);
+	$pathset_timestamp{$path_basenoext{$readme_path}} = $readme_timestamp;
+	dbg(1, "readme timestamp: " . gmtime($readme_timestamp) . " UTC");
 	# $path_destdir{$readme_path} will be filled in by dir_setup()
 	# $path_destfile{$readme_path} will be filled in by set_destname()
 	# $destpath_path{$destpath} will be filled in by set_destname()
@@ -343,10 +358,10 @@ sub parse_args()
 	error(2, "-c (compare) conflicts with -m (move)");
     }
     if (! defined $ARGV[0] || ! defined $ARGV[1]) {
-	error(3, "missing args\nusage:\n\t$help");
+	error(3, "missing args, usage:\n$help");
     }
     if (defined $ARGV[2]) {
-	error(4, "too many args\nusage:\n\t$help");
+	error(4, "too many args, usage:\n$help");
     }
     if (defined $opt_e && defined $opt_n) {
 	error(5, "-e exifroll conflicts with -n rollnum");
@@ -407,18 +422,18 @@ sub parse_args()
 	dbg(1, "won't verify/compare files afterwords");
     }
     if ($opt_m) {
-    	dbg(1, "will move (not copy) files");
+	dbg(1, "will move (not copy) files");
     } else {
-    	dbg(1, "will copy (not move) files");
+	dbg(1, "will copy (not move) files");
     }
     if ($opt_o) {
-    	dbg(1, "override existing files");
+	dbg(1, "override existing files");
     } else {
-    	dbg(1, "change new filenames so as to not overwrite existing files");
+	dbg(1, "change new filenames so as to not overwrite existing files");
     }
     dbg(1, "~/exifroll file: $rollfile");
     dbg(1, "roll_sub max length is " .
-    	   ($roll_sub_maxlen > 0 ? $roll_sub_maxlen : "unlimited"));
+	   ($roll_sub_maxlen > 0 ? $roll_sub_maxlen : "unlimited"));
     dbg(1, ($opt_t ? "don't" : "do") . " touch file modtimes");
     if ($opt_r) {
 	dbg(1, "will special process readme file: $opt_r");
@@ -435,16 +450,16 @@ sub parse_args()
 	if (! defined $readme_dev || ! defined $readme_ino) {
 	    error(10, "stat error on $readme_path: $!");
 	}
-        if (!defined $readme_path) {
+	if (!defined $readme_path) {
 	    error(11, "-r $opt_r but we have no readme_path");
 	}
-        if (!defined $readme_path) {
+	if (!defined $readme_path) {
 	    error(12, "-r $opt_r but we have no readme_timestamp");
 	}
-        if (!defined $readme_dev) {
+	if (!defined $readme_dev) {
 	    error(13, "-r $opt_r but we have no readme_dev");
 	}
-        if (!defined $readme_ino) {
+	if (!defined $readme_ino) {
 	    error(14, "-r $opt_r but we have no readme_ino");
 	}
     }
@@ -452,17 +467,17 @@ sub parse_args()
     # untaint $srcdir, $destdir, and $rollfile
     #
     if ($srcdir =~ /$untaint/o) {
-    	$srcdir = $1;
+	$srcdir = $1;
     } else {
 	error(15, "bogus chars in srcdir");
     }
     if ($destdir =~ /$untaint/o) {
-    	$destdir = $1;
+	$destdir = $1;
     } else {
 	error(16, "bogus chars in destdir");
     }
     if ($rollfile =~ /$untaint/o) {
-    	$rollfile = $1;
+	$rollfile = $1;
     } else {
 	error(17, "bogus chars in -e filename");
     }
@@ -504,7 +519,7 @@ sub destdir_path($$$)
     # firewall - untaint and sanity check roll number
     #
     if ($roll =~ /$untaint_file/o) {
-    	$roll = $1;
+	$roll = $1;
     } else {
 	error(21, "bogus chars in roll");
     }
@@ -618,10 +633,10 @@ sub dir_setup()
     #
     $err = 0;
     foreach $path ( sort @need_subdir ) {
-    	($errcode, $errmsg) = form_dir("$destdir/$path");
+	($errcode, $errmsg) = form_dir("$destdir/$path");
 	if ($errcode != 0) {
 	    error(-$errcode, "subdir mkdir error: $errmsg for " .
-	    	  "$destdir/$path");
+		  "$destdir/$path");
 	    $err = $errcode;	# delayed exit
 	    next;
 	}
@@ -653,9 +668,9 @@ sub dir_setup()
 # If $need_plus{$path} == 0, then $basenoext_pathset{$path} will be
 # an array with just 1 element.
 #
-# We maintain a file timestamp for each path to a file.  This
+# We maintain a file timestamp for each path to a file.	 This
 # timestamp is usually the file create time or file modification time,
-# which ever is older.  When selecting the older of create and mod times,
+# which ever is older.	When selecting the older of create and mod times,
 # we ignore those that are older than the minimum timestamp (which is
 # Tue Nov  5 00:53:20 1985 UTC).  If both are older than the minimum
 # timestamp, we use the older non-zero timestamp.  If both the create
@@ -690,7 +705,7 @@ sub dir_setup()
 # To be safe, we ignore any file that has .Trashes on the end if its name.
 #
 # In addition, other files such as .DS_Store may be created by OS X.
-# These .DS_Store files should be ignored by the tool.  The Titanium
+# These .DS_Store files should be ignored by the tool.	The Titanium
 # Toast CD/DVD burner creates "desktop db" and "desktop df" which
 # are also ignored by this shell.
 #
@@ -719,7 +734,7 @@ sub dir_setup()
 #	$srcdir			top of where images are from
 #	$destdir		top of where copied and renamed files go
 #	$File::Find::dir	current directory name
-#	$File::Find::name 	complete pathname to the file
+#	$File::Find::name	complete pathname to the file
 #	$File::Find::prune	set 1 one to prune current node out of path
 #	$File::Find::top dir	top directory path ($srcdir)
 #	$File::Find::topdev	device of the top directory
@@ -749,7 +764,7 @@ sub wanted($)
     $pathname =~ s|//+|/|g;
     $pathname =~ s|(.)/+$|$1|;
     if ($pathname =~ /$untaint/o) {
-    	$pathname = $1;
+	$pathname = $1;
     } else {
 	warning("tainted filename prune #1 $pathname");
 	$File::Find::prune = 1;
@@ -915,7 +930,7 @@ sub wanted($)
 	if (defined $devino_path{"$dev/$ino"}) {
 	    warning("dup dev/ino found: dev: $dev inum: $ino");
 	    dbg(1, "duplicate skip #17 $path same file as " .
-	           "$devino_path{$dev/$ino}");
+		   "$devino_path{$dev/$ino}");
 	    next;
 	}
 
@@ -924,9 +939,9 @@ sub wanted($)
 	($basenoext = $entry) =~ s/\.[^.]*$//;
 	if ($basenoext eq "readme" && defined $opt_r) {
 	    warning("-r was given found file with a basename of readme " .
-	    	 "(w/o .extension)");
+		 "(w/o .extension)");
 	    dbg(1, "duplicate prune #18 $path readme basename w/o " .
-	           ".extension: $path");
+		   ".extension: $path");
 	    next;
 	}
 	dbg(3, "recording information about $path");
@@ -945,14 +960,14 @@ sub wanted($)
 	    # save this base w/o .ext in the pathset
 	    push(@{$basenoext_pathset{$basenoext}}, $path);
 	    dbg(5, "added $path to $basenoext pathset, pathset size: " .
-	    	   scalar(@{$basenoext_pathset{$basenoext}}));
+		   scalar(@{$basenoext_pathset{$basenoext}}));
 	} else {
 	    # not a dup (yet)
 	    $need_plus{$path} = 0;
 	    # save this base w/o .ext in the pathset
 	    push(@{$basenoext_pathset{$basenoext}}, $path);
 	    dbg(5, "added $path to new $basenoext pathset, pathset size: " .
-	    	   scalar(@{$basenoext_pathset{$basenoext}}));
+		   scalar(@{$basenoext_pathset{$basenoext}}));
 	}
 
 	# save the file timestamp
@@ -965,15 +980,15 @@ sub wanted($)
 	if ($ctime >= $mintime) {
 	    if ($mtime >= $mintime) {
 		$path_filetime{$path} = ($ctime <= $mtime ? $ctime : $mtime);
-    	    } else {
+	    } else {
 		$path_filetime{$path} = $ctime;
 	    }
-        } elsif ($mtime >= $mintime) {
+	} elsif ($mtime >= $mintime) {
 	    $path_filetime{$path} = $mtime;
 	} elsif ($ctime > 0) {
 	    if ($mtime > 0) {
 		$path_filetime{$path} = ($ctime <= $mtime ? $ctime : $mtime);
-    	    } else {
+	    } else {
 		$path_filetime{$path} = $ctime;
 	    }
 	} else {
@@ -1067,15 +1082,15 @@ sub wanted($)
 #	/200505				# image year & month
 #	/200505-043			# image year & month, - (dash), roll
 #	/200505-043-010			# year & month, -, roll, -, roll-subdir
-#	/121525+5627-45-200505-043-101-pg5v.cr2	# image filename (see below)
+#	/121525+5627-45-200505-043-101-pg5v.cr2 # image filename (see below)
 #
 # NOTE: The property of directory names under /destdir that they are
-#	unique  and standalone.  One can look at one of these sub-directories
+#	unique	and standalone.	 One can look at one of these sub-directories
 #	and know where it belongs.  That is why the yyyymm and yyyymm-roll
 #	are repeated in the lower level directories.
 #
 # NOTE: The property of a filename is that they completely define the
-#	directory path under whey they belong.  One can look at a filename
+#	directory path under whey they belong.	One can look at a filename
 #	and know where it belongs.
 #
 # NOTE: Another important property of a filename is that the original
@@ -1208,6 +1223,8 @@ sub wanted($)
 #
 sub set_destname()
 {
+    my $basename_noext; # pathset basename without .extension
+    my $pathset;	# array of parts from a single %basenoext_pathset
     my $path;		# a path in the pathset
     my $srcbase;	# basename of the source path
     my $lc_srcbase;	# lowercase basename of the source path
@@ -1222,235 +1239,380 @@ sub set_destname()
     my $roll_sub;	# roll sub directory
     my $srcext;		# .extension of the source path
     my $destpath;;	# full destination path
-    my $dup;		# duplicate timestamp / destination path number
+    my $highest_dup;	# highest dup timestamp / dest number, 0 ==> no dups
+    my $pathset_err;	# 0 ==> pathset is OK, != 0 ==> the $err of a member
+    my %path_lc_srcbase;	# key: paths value: cached lc_srcbase value
 
     # process all paths
     #
     $err = 0;
-    foreach $path ( keys %path_basenoext ) {
+    foreach $basename_noext ( sort keys %basenoext_pathset ) {
 
-	# get the basename of the source path in lowercase
+	# get the current pathset
 	#
-	$srcbase = basename($path);
-	$lc_srcbase = lc($srcbase);
-
-	# deal with filenames in old style destination form
-	#
-	# If the lowercase name is already of the form:
-	#
-	#	043-101-20050512-152545-ls1f5629.cr2
-	#	043-101-20050512-152545_1-ls1f5630.cr2
-	#
-	# convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
-	# reprocess the destination tree if we want to later on.
-	#
-	if ($lc_srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
-	    dbg(2, "found old style filename: $lc_srcbase");
-	    $lc_srcbase = $2;
-	    if ($lc_srcbase =~ /-/) {
-		$lc_srcbase = s/-/_/g;
-		dbg(4, "conv -'s to _'s in old srcbase");
-	    }
-	    dbg(2, "preconverted old style to: $lc_srcbase");
-
-	# deal with filenames in the new style destination form
-	#
-	# If the lowercase name is already of the form:
-	#
-	#	121525+5627-45-200505-043-101-pg5v.cr2
-	#	121526+5628-45_1-200505-043-101-pg5v.cr2
-	#
-	# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
-	# reprocess the destination tree if we want to later on.
-	#
-	} elsif ($lc_srcbase =~
-			m{
-    			  \d{6}	      # ddmmhh
-			  [-+]	      # - (dash) or + (plus) separator
-			  ([^-]*)     # $1: sequence number
-			  -	      # - (dash) separator
-			  \d{2}	      # ss
-			  (_\d+)?     # $2: opt digits for dups in same sec
-			  \d{6}	      # yyyymm
-			  -	      # - (dash) separator
-			  [^-]*	      # roll number
-			  -	      # - (dash) separator
-			  [^-]*	      # sub-roll number
-			  -	      # - (dash) separator
-			  ([^_.]*)    # $3: image filename chars before seqnum
-			  (_[^.]*)?   # $4: optional imagename chars after seq
-			  (\..*)?$    # $5: optional .extension
-    			 }ix) {
-	    dbg(2, "found new style filename: $lc_srcbase");
-	    $lc_srcbase = $3 . $1 . substr($4, 1) . $5;
-	    if ($lc_srcbase =~ /-/) {
-		$lc_srcbase = s/-/_/g;
-		dbg(4, "conv -'s to _'s in new srcbase");
-	    }
-	    dbg(2, "preconverted new style to: $lc_srcbase");
-
-	# -'s (dash) become _'s (underscore) to avoid filename field confusion
-	#
-	} elsif ($lc_srcbase =~ /-/) {
-	    dbg(4, "conv -'s to _'s in srcbase");
-	    $lc_srcbase =~ s/-/_/g;
+	$pathset = $basenoext_pathset{$basename_noext};
+	if (! defined $pathset) {
+	    warning("undef pathset in set_destname for: $basename_noext");
+	    next;
 	}
-
-	# note the .extension, if any
-	#
-	($srcext = $lc_srcbase) =~ s/^.*\././;
-
-	# get the timestamp for this path
-	#
-	$timestamp = $pathset_timestamp{$path_basenoext{$path}};
-	if (! defined $timestamp) {
-	    error(-50, "timestamp not found for: $path");
-	    $err = 50;	# delay exit(50)
+	if (scalar @{$pathset} <= 0) {
+	    warning("empty pathset in set_destname for: $basename_noext");
 	    next;
 	}
 
-	# convert timestamp to UTC year and month
+	# look for duplicates in each element of the pathset
 	#
-	$yyyymm = strftime("%Y%m", gmtime($timestamp));
-	if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
-	    $yyyymm = $1;
-	} else {
-	    error(-51, "strange chars in yyyymm");
-	    $err = 51;	# delay exit(51)
-	    next;
-	}
+	# Duplicates can arise if the path in the desitions exists.
+	# And to be safe, we make sure that no duplicates arise
+	# in the %destpath_path (hash of files to be created by the
+	# create_destination() function) as well.
+	#
+	# We first will compute the highest $dup duplication value.
+	# A highest $dup valie of 0 means no duplicates were found in the
+	# pathset.
+	#
+	$highest_dup = 0;
+	$pathset_err = 0;
+	foreach $path ( sort @{$pathset} ) {
 
-	# convert timestamp to UTC day of month
-	#
-	$dd = strftime("%d", gmtime($timestamp));
-	if (defined $dd && $dd =~ /$untaint/o) {
-	    $dd = $1;
-	} else {
-	    error(-52, "strange chars in dd");
-	    $err = 52;	# delay exit(52)
-	    next;
-	}
+	    my $dup;	# duplicate timestamp / dest number, 0 ==> no dup
 
-	# convert timestamp to UTC hour and minute
-	#
-	$hhmm = strftime("%H%M", gmtime($timestamp));
-	if (defined $hhmm && $dd =~ /$untaint/o) {
-	    $hhmm = $1;
-	} else {
-	    error(-53, "strange chars in hhmm");
-	    $err = 53;	# delay exit(53)
-	    next;
-	}
-
-	# convert timestamp to UTC second
-	#
-	$ss = strftime("%S", gmtime($timestamp));
-	if (defined $ss && $ss =~ /$untaint/o) {
-	    $ss = $1;
-	} else {
-	    error(-54, "strange chars in ss");
-	    $err = 54;	# delay exit(54)
-	    next;
-	}
-
-	# determine if this file is part of a 2+ pathset
-	#
-	$multifound = $need_plus{$path};
-	if (! defined $multifound) {
-	    error(-55, "no info on need for + or - found");
-	    $err = 55;	# delay exit(55)
-	    next;
-	}
-
-	# determine the roll sub-directory
-	#
-	$roll_sub = $path_roll_sub{$path};
-	if (! defined $roll_sub) {
-	    error(-56, "no info on roll sub-directory found");
-	    $err = 56;	# delay exit(56)
-	    next;
-	}
-
-	# form the new destination filename
-	#
-	# An example of a new destination filename:
-	#
-	#	121525+5627-45-200505-043-101-pg5v.cr2
-	#
-	$destbase = "$yyyymm";
-	$destbase .= ($multifound ? "+" : "-");
-	$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
-	$destbase .= "-$ss-$yyyymm-$rollnum-";
-	$destbase .= substr($roll_sub, $roll_sub_skip, $roll_sub_maxlen);
-	$destbase .= "-";
-	$destbase .= substr($lc_srcbase, 0, $mv_end_chars);
-	if (length($lc_srcbase) >
-	    $mv_fwd_chars+$mv_end_chars+length($srcext)) {
-	    $destbase .= "_";
-	    $destbase .= substr($lc_srcbase, $mv_fwd_chars+$mv_end_chars);
-	} else {
-	    $destbase .= $srcext;
-	}
-
-	# firewall - must already have path_destdir
-	#
-	if (! defined $path_destdir{$path}) {
-	    error(-57, "missing destdir path for: $path");
-	    $err = 57;	# delay exit(57)
-	    next;
-	}
-	$destpath = $path_destdir{$path};
-
-	# If there is a collision or if the destination already exists, add
-	# a _digit after the seconds until we give up.
-	#
-	$dup = 0;
-	while (!defined $opt_o &&
-		(defined $destpath_path{"$destpath/$destbase"} ||
-	         -e "$destpath/$destbase")) {
-
-	    # debug
+	    # get the basename of the source path in lowercase
 	    #
-	    if (defined $destpath_path{$destpath}) {
-		dbg(3, "already creating $destpath, selecting another name");
-	    } elsif (-e "$destpath/$destbase") {
-		dbg(3, "desitnation exists $destpath/$destpath, " .
-		       "selecting another name");
+	    $srcbase = $path_basenoext{$path};
+	    $lc_srcbase = lc($srcbase);
+
+	    # deal with filenames in old style destination form
+	    #
+	    # If the lowercase name is already of the form:
+	    #
+	    #	043-101-20050512-152545-ls1f5629.cr2
+	    #	043-101-20050512-152545_1-ls1f5630.cr2
+	    #
+	    # convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
+	    # reprocess the destination tree if we want to later on.
+	    #
+	    if ($lc_srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+		dbg(2, "found old style filename: $lc_srcbase");
+		$lc_srcbase = $2;
+		if ($lc_srcbase =~ /-/) {
+		    $lc_srcbase = s/-/_/g;
+		    dbg(4, "conv -'s to _'s in old srcbase");
+		}
+		dbg(2, "preconverted old style to: $lc_srcbase");
+
+	    # deal with filenames in the new style destination form
+	    #
+	    # If the lowercase name is already of the form:
+	    #
+	    #	121525+5627-45-200505-043-101-pg5v.cr2
+	    #	121526+5628-45_1-200505-043-101-pg5v.cr2
+	    #
+	    # convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
+	    # reprocess the destination tree if we want to later on.
+	    #
+	    } elsif ($lc_srcbase =~
+		    m{
+		      \d{6}	 # ddmmhh
+		      [-+]	# - (dash) or + (plus) separator
+		      ([^-]*)	# $1: sequence number
+		      -		# - (dash) separator
+		      \d{2}	# ss
+		      (_\d+)?	# $2: opt digits for dups in same sec
+		      \d{6}	# yyyymm
+		      -		# - (dash) separator
+		      [^-]*	# roll number
+		      -		# - (dash) separator
+		      [^-]*	# sub-roll number
+		      -		# - (dash) separator
+		      ([^_.]*)	# $3: image filename chars before seqnum
+		      (_[^.]*)? # $4: optional imagename chars after seq
+		      (\..*)?$	# $5: optional .extension
+		     }ix) {
+		dbg(2, "found new style filename: $lc_srcbase");
+		$lc_srcbase = $3 . $1 . substr($4, 1) . $5;
+		if ($lc_srcbase =~ /-/) {
+		    $lc_srcbase = s/-/_/g;
+		    dbg(4, "conv -'s to _'s in new srcbase");
+		}
+		dbg(2, "preconverted new style to: $lc_srcbase");
+
+	    # -'s (dash) become _'s (underscore) to avoid
+	    # filename field confusion
+	    #
+	    } elsif ($lc_srcbase =~ /-/) {
+		dbg(4, "conv -'s to _'s in srcbase");
+		$lc_srcbase =~ s/-/_/g;
+	    }
+	    # cache the lc_srcbase value
+	    $path_lc_srcbase{$path} = $lc_srcbase;
+
+	    # note the .extension, if any
+	    #
+	    if ($path =~ /\./) {
+		($srcext = lc($path)) =~ s/^.*\././;
+	    } else {
+		$srcext = "";
 	    }
 
-	    # form the next filename and retry
+	    # get the timestamp for this path
 	    #
-	    ++$dup;
-	    if ($dup >= $max_dup) {
-		error(-58, "unable to form a unique destination filename " .
- 			   "for $destpath");
-	    	$err = 58;	# delay exit(58);
-		last;
+	    $timestamp = $pathset_timestamp{$path_basenoext{$path}};
+	    if (! defined $timestamp) {
+		error(-50, "timestamp not found for: $path");
+		$err = 50;	# delay exit(50)
+		$pathset_err = $err;
+		next;
 	    }
-	    $destbase = "$yyyymm";
+
+	    # convert timestamp to UTC year and month
+	    #
+	    $yyyymm = strftime("%Y%m", gmtime($timestamp));
+	    if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
+		$yyyymm = $1;
+	    } else {
+		error(-51, "strange chars in yyyymm");
+		$err = 51;	# delay exit(51)
+		next;
+	    }
+
+	    # convert timestamp to UTC day of month
+	    #
+	    $dd = strftime("%d", gmtime($timestamp));
+	    if (defined $dd && $dd =~ /$untaint/o) {
+		$dd = $1;
+	    } else {
+		error(-52, "strange chars in dd");
+		$err = 52;	# delay exit(52)
+		$pathset_err = $err;
+		next;
+	    }
+
+	    # convert timestamp to UTC hour and minute
+	    #
+	    $hhmm = strftime("%H%M", gmtime($timestamp));
+	    if (defined $hhmm && $dd =~ /$untaint/o) {
+		$hhmm = $1;
+	    } else {
+		error(-53, "strange chars in hhmm");
+		$err = 53;	# delay exit(53)
+		$pathset_err = $err;
+		next;
+	    }
+
+	    # convert timestamp to UTC second
+	    #
+	    $ss = strftime("%S", gmtime($timestamp));
+	    if (defined $ss && $ss =~ /$untaint/o) {
+		$ss = $1;
+	    } else {
+		error(-54, "strange chars in ss");
+		$err = 54;	# delay exit(54)
+		$pathset_err = $err;
+		next;
+	    }
+
+	    # determine if this file is part of a 2+ pathset
+	    #
+	    $multifound = $need_plus{$path};
+	    if (! defined $multifound) {
+		error(-55, "no info on need for + or - found");
+		$err = 55;	# delay exit(55)
+		$pathset_err = $err;
+		next;
+	    }
+
+	    # determine the roll sub-directory
+	    #
+	    $roll_sub = $path_roll_sub{$path};
+	    if (! defined $roll_sub) {
+		# undefined rollsub means an empty roll_sub
+		$roll_sub = "";
+	    }
+
+	    # form the new destination filename
+	    #
+	    # An example of a new destination filename:
+	    #
+	    #	121525+5627-45-200505-043-101-pg5v.cr2
+	    #
+	    $destbase = "$hhmm";
 	    $destbase .= ($multifound ? "+" : "-");
 	    $destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
-	    $destbase .= "-${ss}_$dup-$yyyymm-$rollnum-";
+	    $destbase .= "-$ss-$yyyymm-$rollnum-";
 	    $destbase .= substr($roll_sub, $roll_sub_skip, $roll_sub_maxlen);
 	    $destbase .= "-";
 	    $destbase .= substr($lc_srcbase, 0, $mv_end_chars);
-	    if (length($lc_srcbase) >
-	        $mv_fwd_chars+$mv_end_chars+length($srcext)) {
+	    if (length($lc_srcbase) > $mv_fwd_chars+$mv_end_chars) {
 		$destbase .= "_";
 		$destbase .= substr($lc_srcbase, $mv_fwd_chars+$mv_end_chars);
-	    } else {
+	    }
+	    $destbase .= $srcext;
+
+	    # firewall - must already have path_destdir
+	    #
+	    if (! defined $path_destdir{$path}) {
+		error(-57, "missing destdir path for: $path");
+		$err = 57;	# delay exit(57)
+		$pathset_err = $err;
+		next;
+	    }
+	    $destpath = $path_destdir{$path};
+
+	    # If there is a collision or if the destination already exists, add
+	    # a _digit after the seconds until we give up.
+	    #
+	    $dup = 0;
+	    while (!defined $opt_o &&
+		    (defined $destpath_path{"$destpath/$destbase"} ||
+		     -e "$destpath/$destbase")) {
+
+		# see if we have more duplicates
+		#
+		++$dup;
+		if ($dup >= $max_dup) {
+		    error(-58, "dup: $dup >= max_dup: $max_dup, unable to " .
+			       "form a unique destination filename for " .
+			       $destpath);
+		    $err = 58;	# delay exit(58);
+		    $pathset_err = $err;
+		    if ($dup > $highest_dup) {
+			$highest_dup = $dup;
+		    }
+		    last;
+		}
+
+		# debug
+		#
+		if (defined $destpath_path{$destpath}) {
+		    dbg(4, "already creating $destpath, " .
+			   "selecting another name with dup: $dup");
+		} elsif (-e "$destpath/$destbase") {
+		    dbg(4, "desitnation exists $destpath/$destpath, " .
+			   "selecting another name with dup: $dup");
+		}
+
+		# form the next filename and retry
+		#
+		$destbase = "$hhmm";
+		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
+		$destbase .= "-${ss}_$dup-$yyyymm-$rollnum-";
+		$destbase .= substr($roll_sub, $roll_sub_skip,
+				    $roll_sub_maxlen);
+		$destbase .= "-";
+		$destbase .= substr($lc_srcbase, 0, $mv_end_chars);
+		if (length($lc_srcbase) > $mv_fwd_chars+$mv_end_chars) {
+		    $destbase .= "_";
+		    $destbase .= substr($lc_srcbase,
+					$mv_fwd_chars+$mv_end_chars);
+		}
 		$destbase .= $srcext;
 	    }
-	}
-	if ($dup >= $max_dup) {
-	    next;
-	}
-	$destpath_path{"$destpath/$destbase"} = $path;
+	    if ($dup > 0) {
+		dbg(3, "for $destpath, dup: $dup");
+	    }
 
-	# note our final destination filename
+	    # keep track of the the highest $dup value
+	    #
+	    if ($dup > $highest_dup) {
+		$highest_dup = $dup;
+		dbg(3, "for pathset: $basename_noext, we have a new " .
+		       "highest dup: $highest_dup");
+	    }
+
+	}
+
+	# If we failed to find a unquie dup value for this pastset,
+	# of it we failed to process all members of the pathset,
+	# gthen do nothing more with this pathset.
 	#
-	$path_destfile{$path} = $destbase;
-	dbg(2, "src: $srcbase will become: $destbase");
+	if ($pathset_err != 0) {
+	    # The $err value has already # been set, so we just carry on
+	    # with the next pathset in this case.
+	    next;
+
+	# otherwise use the highest dup level for all of the paths
+	# in the pathset.  Note that a dup level of 0 means that
+	# no duplicates were found.
+	#
+	} else {
+
+	    # process each element of the pathset in the same way
+	    #
+	    foreach $path ( sort @{$pathset} ) {
+
+		# start from the cahced lc_srcbase value
+		#
+		$lc_srcbase = $path_lc_srcbase{$path};
+		if (! defined $lc_srcbase) {
+		    error(-59, "undef lc_srcbase cache value for $path");
+		    $err = 59;	# delay exit(59);
+		    last;
+		}
+
+		# note the .extension, if any
+		#
+		if ($path =~ /\./) {
+		    ($srcext = lc($path)) =~ s/^.*\././;
+		} else {
+		    $srcext = "";
+		}
+
+		# recompute the intermediate values again
+		#
+		$timestamp = $pathset_timestamp{$path_basenoext{$path}};
+		if (! defined $timestamp) {
+		    error(-60, "undef 2nd get of timestamp for $path");
+		    $err = 60;	# delay exit(60);
+		    last;
+		}
+		$yyyymm = strftime("%Y%m", gmtime($timestamp));
+		$dd = strftime("%d", gmtime($timestamp));
+		$hhmm = strftime("%H%M", gmtime($timestamp));
+		$ss = strftime("%S", gmtime($timestamp));
+		$multifound = $need_plus{$path};
+		$roll_sub = $path_roll_sub{$path};
+		if (! defined $yyyymm || ! defined $dd || ! defined $hhmm ||
+		    ! defined $ss || ! defined $multifound) {
+		    error(-61, "undef of some intermediate var for $path");
+		    $err = 61;	# delay exit(60);
+		    last;
+		}
+		$roll_sub = "" if ! defined $roll_sub;
+
+		# form the next filename and retry using the same
+		# dup level for all members of the pathset
+		#
+		if ($highest_dup > 0) {
+		    $ss .= "_$highest_dup";
+		}
+		$destbase = "$hhmm";
+		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
+		$destbase .= "-$ss-$yyyymm-$rollnum-";
+		$destbase .= substr($roll_sub, $roll_sub_skip,
+				    $roll_sub_maxlen);
+		$destbase .= "-";
+		$destbase .= substr($lc_srcbase, 0, $mv_end_chars);
+		if (length($lc_srcbase) > $mv_fwd_chars+$mv_end_chars) {
+		    $destbase .= "_";
+		    $destbase .= substr($lc_srcbase,
+					$mv_fwd_chars+$mv_end_chars);
+		}
+		$destbase .= $srcext;
+
+		# note the intented use of the destination path so that
+		# later pahtsets, for some reason, won't reuse it
+		#
+		$destpath_path{"$destpath/$destbase"} = $path;
+
+		# note our final destination filename
+		#
+		$path_destfile{$path} = $destbase;
+		dbg(2, "src: $path will become: $destpath/$destbase");
+	    }
+	}
     }
 
     # process a delayed fatal error exit if needed
@@ -1463,7 +1625,7 @@ sub set_destname()
 # get_timestamp - determine the timestamp of EXIF or file dates
 #
 # given:
-#	\@pathset 	    array of paths to to check
+#	\@pathset	    array of paths to to check
 #	$basename_noext	    pathset name
 #
 # returns:
@@ -1528,7 +1690,7 @@ sub get_timestamp($$)
 		dbg(4, "get_timestamp EXIF type: $path " .
 		       "older EXIF time: $message");
 	    } elsif ($exitcode != 0) {
-	        dbg(4, "exif_date error code $exitcode: $message");
+		dbg(4, "exif_date error code $exitcode: $message");
 	    }
 	}
     }
@@ -1608,7 +1770,7 @@ sub get_timestamp($$)
 sub set_timestamps()
 {
     my $err;		# >0 ==> fatal error number, 0 ==> OK
-    my $basename_noext;	# pathset basename without .extension
+    my $basename_noext; # pathset basename without .extension
 
     # process each pathset and determine timestamps for each set
     #
@@ -1624,11 +1786,11 @@ sub set_timestamps()
 	#
 	if (defined $pathset_timestamp{$basename_noext}) {
 	    dbg(1, "pathset $basename_noext timestamp: " .
-	           gmtime($pathset_timestamp{$basename_noext}) . " UTC");
+		   gmtime($pathset_timestamp{$basename_noext}) . " UTC");
 	} else {
-	    error(-60, "no valid EXIF timestamp and file " .
-	    	       "timestamp(s) too old for pathset: $basename_noext");
-	    $err = 60;	# delayed exit(60);
+	    error(-65, "no valid EXIF timestamp and file " .
+		       "timestamp(s) too old for pathset: $basename_noext");
+	    $err = 65;	# delayed exit(60);
 	    next;
 
 	}
@@ -1675,7 +1837,7 @@ sub exif_date($)
 	# failure to get a EXIF data
 	if (defined $$info{Error}) {
 	    return (72, "EXIF data error: $$info{Error}");	# exit(72)
-        } else {
+	} else {
 	    return (73, "no EXIF data");	# exit(73)
 	}
     }
@@ -1683,7 +1845,7 @@ sub exif_date($)
     # look at each EXIF tag value we found
     #
     # We are looking for the earliest timestamp that is not before
-    # $mintime.  A < 0 timestamp means nothing found so far.
+    # $mintime.	 A < 0 timestamp means nothing found so far.
     #
     $timestamp = -1;	# no timestamp yet
     foreach $tag (@tag_list) {
@@ -1700,11 +1862,11 @@ sub exif_date($)
 	    dbg(5, "ignoring timestamp tag: $tag: $$info{$tag} same value");
 	} elsif ($timestamp > 0 && $$info{$tag} > $timestamp) {
 	    dbg(5, "ignoring timestamp tag: $tag: " .
-	           "$$info{$tag} that is not earliest > $timestamp");
+		   "$$info{$tag} that is not earliest > $timestamp");
 	} else {
 	    dbg(5, "found useful numeric timestamp tag: $tag $$info{$tag}");
 	    $timestamp = $$info{$tag};
-        }
+	}
     }
     if ($timestamp < 0) {
 	return (74, "no timestamp in EXIF data");	# exit(74)
@@ -1728,18 +1890,18 @@ sub exif_date($)
 # the form:
 #
 #	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-#	xx    xxxxx 		xxxxxxxx    xxx... <== x's mark optional fields
+#	xx    xxxxx		xxxxxxxx    xxx... <== x's mark optional fields
 #
 # NOTE: SS (seconds of minute) default to 0 if it is not given.
 #
 # or of these forms:
 #
 #	# date: YYYY/MM/dd hh:mm:ss
-#	xx    x           xxxxxxxxx            <== x's mark optional fields
+#	xx    x		  xxxxxxxxx	       <== x's mark optional fields
 #	# date: YYYY-MM-dd hh:mm:ss
-#	xx    x            xxxxxxxx            <== x's mark optional fields
+#	xx    x		   xxxxxxxx	       <== x's mark optional fields
 #	# date: YYYY.MM.dd hh:mm:ss
-#	xx    x           xxxxxxxxx            <== x's mark optional fields
+#	xx    x		  xxxxxxxxx	       <== x's mark optional fields
 #
 # NOTE: hh:mm:ss default to 12:00:00 if it is not given
 #
@@ -1773,7 +1935,7 @@ sub text_date($)
     #
     dbg(4, "looking for date in text file: $filename");
     if (! open TEXT, '<', $filename) {
-	return (82, "cannot open: $!");	# exit(82)
+	return (82, "cannot open: $!"); # exit(82)
     }
 
     # read the 1st $datelines of a file looking for a timestamp
@@ -1791,7 +1953,7 @@ sub text_date($)
 	# look for a date string of the form:
 	#
 	#	# date: Xyz Oct dd HH:MM:SS ABC YYYY
-	#	xx    xxxxx 		xxxxxxxx    xxx... <== optional fields
+	#	xx    xxxxx		xxxxxxxx    xxx... <== optional fields
 	#
 	# NOTE: SS (seconds of minute) default to 0 if it is not given.
 	#
@@ -1799,7 +1961,7 @@ sub text_date($)
 		      ^
 		      (\#\s*)?	# 1: optional # space (ignored)
 		      date(:)?	# 2: date with optional : (ignored)
-		      (\s*\S+)?	# 3: day of week (ignored)
+		      (\s*\S+)? # 3: day of week (ignored)
 		      \s+
 		      (\S+)	# 4: short name of month
 		      \s+
@@ -1809,7 +1971,7 @@ sub text_date($)
 		      :
 		      (\d+)	# 7: minute of hour
 		      (:\d+)?	# 8: optional :seconds (defaults to "00")
-		      (\s+\S+)?	# 9: optional timezone (ignored)
+		      (\s+\S+)? # 9: optional timezone (ignored)
 		      \s+
 		      (\d{4})	# 10: 4 digit year
 		      }ix) {
@@ -1823,7 +1985,7 @@ sub text_date($)
 	    my $year = $10;	# year
 	    my $timestamp;	# date string converted into a timestamp
 	    dbg(6, "#1 parsed $year-$monname-$mday $hour:$min" .
-	           (defined $sec ? ":$sec" : ""));
+		   (defined $sec ? ":$sec" : ""));
 
 	    # convert short name of month to month number [0..11]
 	    #
@@ -1834,7 +1996,7 @@ sub text_date($)
 	    if ($mon < 0) {
 		dbg(4, "ignoring bad month name $monname on line $i " .
 		       "in $filename");
-	    	next;	# bad month name
+		next;	# bad month name
 	    }
 
 	    # fix seconds, the above regexp prepends a : or undefs it
@@ -1848,17 +2010,17 @@ sub text_date($)
 	    # convert fields to a timestamp
 	    #
 	    dbg(6, "#1 will parse date: " .
-	           sprintf("%04d-%02d-%02d %02d:%02d:%02d\n",
-		   	   $year, $mon, $mday, $hour, $min, $sec));
+		   sprintf("%04d-%02d-%02d %02d:%02d:%02d\n",
+			   $year, $mon, $mday, $hour, $min, $sec));
 	    $timestamp = timegm_nocheck($sec, $min, $hour, $mday, $mon, $year);
 	    if (! defined $timestamp) {
 		dbg(4, "#1 ignoring malformed date on line $i " .
 		       "in $filename");
-	    	next;	# bad month name
+		next;	# bad month name
 	    }
 	    if ($timestamp < $mintime) {
 		dbg(4, "#1 ignoring very early date on line $i in $filename");
-	    	next;	# bad month name
+		next;	# bad month name
 	    }
 	    dbg(2, "#1 $filename timestamp: $timestamp");
 
@@ -1869,13 +2031,13 @@ sub text_date($)
 	# look for a date string of the form:
 	#
 	#	# date: YYYY/MM/dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#	xx    x		  xxxxxxxxxxxx	   <== x's mark optional fields
 	#
 	#	# date: YYYY-MM-dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#	xx    x		  xxxxxxxxxxxx	   <== x's mark optional fields
 	#
 	#	# date: YYYY.MM.dd hh:mm:ss
-	#	xx    x           xxxxxxxxxxxx     <== x's mark optional fields
+	#	xx    x		  xxxxxxxxxxxx	   <== x's mark optional fields
 	#
 	# NOTE: hh:mm:ss default to 12:00:00 if it is not given
 	#
@@ -1888,25 +2050,25 @@ sub text_date($)
 		      [/.-]
 		      (\d{2})	# 4: 2 digit month of year [01-12]
 		      [/.-]
-		      (\d{2})	# 5: 2  2 digit day of month [01-31]
+		      (\d{2})	# 5: 2	2 digit day of month [01-31]
 		      (\s+\d{2}:\d{2}:\d{2})?  # 6: optional hh:mm:ss timestamp
 		      }ix) {
 
 	    my $sec;		# seconds of minute
 	    my $min;		# minute of hour
 	    my $hour;		# hour of day
-	    my $timeofday = $6;	# optional hh:mm:ss timestamp
+	    my $timeofday = $6; # optional hh:mm:ss timestamp
 	    my $mday = $5;	# day of month
 	    my $mon = $4;	# month of year [01-12]
 	    my $year = $3;	# year
 	    my $timestamp;	# date string converted into a timestamp
 	    dbg(6, "#2 parsed $year-$mon-$mday" .
-	           (defined $timeofday ? " $timeofday" : ""));
+		   (defined $timeofday ? " $timeofday" : ""));
 
 	    # parse timeofday, if given
 	    #
 	    if (defined $timeofday &&
-	    	$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
+		$timeofday =~ m{\s+(\d{2}):(\d{2}):(\d{2})$}) {
 		$hour = $1;
 		$min = $2;
 		$sec = $3;
@@ -1920,17 +2082,17 @@ sub text_date($)
 	    # convert fields to a timestamp
 	    #
 	    dbg(6, "#2 will parse date: " .
-	           sprintf("%04d-%02d-%02d %02d:%02d:%02d",
-		   	   $year, $mon, $mday, $hour, $min, $sec));
+		   sprintf("%04d-%02d-%02d %02d:%02d:%02d",
+			   $year, $mon, $mday, $hour, $min, $sec));
 	    $timestamp = timegm_nocheck($sec, $min, $hour,
-	    				$mday, $mon-1, $year);
+					$mday, $mon-1, $year);
 	    if (! defined $timestamp) {
 		dbg(4, "#2 ignoring malformed date on line $i in $filename");
-	    	next;	# bad month name
+		next;	# bad month name
 	    }
 	    if ($timestamp < $mintime) {
 		dbg(4, "#2 ignoring very early date on line $i in $filename");
-	    	next;	# bad month name
+		next;	# bad month name
 	    }
 	    dbg(2, "#2 $filename timestamp: $timestamp");
 
@@ -1960,19 +2122,28 @@ sub form_dir($)
 {
     my ($dir_name) = @_;	# get args
 
+    # firewall - fast exit if we already created or found this dir
+    #
+    if (defined $have_mkdir{$dir_name}) {
+	return (0, undef);
+    }
+
     # setup the destination directory if needed
     #
     if (-e $dir_name && ! -d $dir_name) {
 	return (90, "is a non-directory: $dir_name");	# exit(90)
     }
     if (! -d $dir_name) {
-        if (mkdir($dir_name, 0775)) {
+	if ($opt_d || mkdir($dir_name, 0775)) {
 	    dbg(1, "mkdir $dir_name");
+	    $have_mkdir{$dir_name} = 1;
 	} else {
-	    return (91, "cannot mkdir: $dir_name: $!");	# exit(91)
+	    return (91, "cannot mkdir: $dir_name: $!"); # exit(91)
 	}
+    } else {
+	$have_mkdir{$dir_name} = 0;
     }
-    if (! -w $dir_name) {
+    if (! $opt_d && ! -w $dir_name) {
 	return (92, "directory is not writable: $dir_name");	# exit(92)
     }
 
@@ -2042,23 +2213,23 @@ sub roll_setup()
     # write the next roll number into ~/.exifroll
     #
     dbg(0, "will use roll number: $rollnum");
-    if (! open EXIFROLL, '>', $rollfile) {
+    if (! $opt_d && ! open EXIFROLL, '>', $rollfile) {
 	error(104, "cannot open for writing exifroll: $rollfile: $!");
     }
     if ($rollnum > 999) {
-	if (! print EXIFROLL "000\n") {
+	if ($opt_d || ! print EXIFROLL "000\n") {
 	    dbg(1, "next roll number will be 000");
 	} else {
 	    error(105, "cannot write 000 rollnum to exifroll: $rollfile: $!");
 	}
     } else {
-	if (printf EXIFROLL "%03d\n", $rollnum+1) {
-	    dbg(1, "next roll number will be %03d" . ($rollnum+1));
+	if ($opt_d || printf EXIFROLL "%03d\n", $rollnum+1) {
+	    dbg(1, sprintf("next roll number will be %03d", $rollnum+1));
 	} else {
 	    error(106, "cannot write next rollnum to exifroll: $rollfile: $!");
 	}
     }
-    close EXIFROLL;
+    close EXIFROLL unless $opt_d;
     return;
 }
 
@@ -2081,20 +2252,20 @@ sub create_destination()
 	$timestamp = $pathset_timestamp{$path_basenoext{$path}};
 	if (! defined $timestamp) {
 	    error(-110, "timestamp not found for: $path");
-	    $err = 110;	# delay exit(110)
+	    $err = 110; # delay exit(110)
 	    next;
 	}
 
-        # determine destination path
+	# determine destination path
 	#
 	if (! defined $path_destdir{$path}) {
 	    error(-111, "no destination directory info for: $path");
-	    $err = 111;	# delayed exit(111)
+	    $err = 111; # delayed exit(111)
 	    next;
 	}
 	if (! defined $path_destfile{$path}) {
 	    error(-112, "no destination filename info for: $path");
-	    $err = 112;	# delayed exit(112)
+	    $err = 112; # delayed exit(112)
 	    next;
 	}
 	$destpath = "$path_destdir{$path}/$path_destfile{$path}";
@@ -2105,7 +2276,7 @@ sub create_destination()
 	    $path = $1;
 	} else {
 	    error(-113, "bogus chars in source path");
-	    $err = 113;	# delayed exit(113)
+	    $err = 113; # delayed exit(113)
 	}
 
 	# untaint destination filename
@@ -2114,42 +2285,44 @@ sub create_destination()
 	    $destpath = $1;
 	} else {
 	    error(-114, "bogus chars in destination path");
-	    $err = 114;	# delayed exit(114)
+	    $err = 114; # delayed exit(114)
 	}
 
 	# copy (or move of -m) the image file
 	#
 	if (defined $opt_m) {
-	    if (move($path, "$destdir/$destpath") == 0) {
+	    if (! $opt_d && move($path, "$destdir/$destpath") == 0) {
 		error(-115, "mv $path $destdir/$destpath failed: $!");
 		$err = 115;	# delated exit(115)
 		next;
 	    }
-	    dbg(3, "success: mv $path $destdir/$destpath");
+	    dbg(3, "mv $path $destdir/$destpath");
 	} else {
-	    if (copy($path, "$destdir/$destpath") == 0) {
+	    if (! $opt_d && copy($path, "$destdir/$destpath") == 0) {
 		error(-116, "cp $path $destdir/$destpath failed: $!");
 		$err = 116;	# delayed exit(116)
 		next;
 	    }
-	    dbg(3, "success: cp $path $destdir/$destpath");
+	    dbg(3, "cp $path $destdir/$destpath");
 	}
 
 	# compare unless -m
 	#
-	if (! defined $opt_m && compare($path, "$destdir/$destpath") != 0) {
+	if (! $opt_d &&
+	    ! defined $opt_m && compare($path, "$destdir/$destpath") != 0) {
 	    error(-117, "compare of $path and $destdir/$destpath failed");
-	    $err = 117;	# delayed exit(117)
+	    $err = 117; # delayed exit(117)
 	    next;
 	}
 	if (! defined $opt_m) {
-	    dbg(3, "success: cmp $path $destdir/$destpath");
+	    dbg(3, "cmp $path $destdir/$destpath");
 	}
 
 	# set the access and modification time unless -t
 	#
 	if (! defined $opt_t) {
-	    if (utime $timestamp, $timestamp, "$destdir/$destpath" < 1) {
+	    if (! $opt_d &&
+	        utime $timestamp, $timestamp, "$destdir/$destpath" < 1) {
 		error(-118, "compare of $path and $destdir/$destpath failed");
 		$err = 118;	# delayed exit(118)
 		next;
@@ -2221,7 +2394,7 @@ sub readme_check($)
 # warning - report an warning
 #
 # given:
-#       $msg		the message to print
+#	$msg		the message to print
 #
 sub warning($)
 {
@@ -2243,12 +2416,12 @@ sub warning($)
 # error - report an error and exit
 #
 # given:
-#       $exitval	exit code value, <= 0 ==> do not exit
-#       $msg		the message to print
+#	$exitval	exit code value, <= 0 ==> do not exit
+#	$msg		the message to print
 #
 sub error($$)
 {
-    my ($exitval, $msg) = @_;    # get args
+    my ($exitval, $msg) = @_;	 # get args
 
     # parse args
     #
@@ -2341,26 +2514,26 @@ sub readme_check($)
 # dbg - print a debug message is debug level is high enough
 #
 # given:
-#       $min_lvl	minimum debug level required to print
-#       $msg		message to print
+#	$min_lvl	minimum debug level required to print
+#	$msg		message to print
 #
 sub dbg($$)
 {
-    my ($min_lvl, $msg) = @_;    # get args
+    my ($min_lvl, $msg) = @_;	 # get args
 
     # firewall
     #
     if (!defined $min_lvl) {
-    	error(97, "debug called without a minimum debug level");
+	error(97, "debug called without a minimum debug level");
     }
     if ($min_lvl =~ /\D/) {
-    	error(98, "debug called with non-numeric debug level: $min_lvl");
+	error(98, "debug called with non-numeric debug level: $min_lvl");
     }
     if ($opt_v < $min_lvl) {
 	return;
     }
     if (!defined $msg) {
-    	error(99, "debug called without a message");
+	error(99, "debug called without a message");
     }
     chomp $msg;
 
