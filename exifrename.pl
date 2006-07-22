@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.5 $
-# @(#) $Id: exifrename.pl,v 3.5 2006/07/20 09:32:53 chongo Exp chongo $
+# @(#) $Revision: 3.6 $
+# @(#) $Id: exifrename.pl,v 3.6 2006/07/21 17:09:57 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.5 $, 10;
+my $VERSION = substr q$Revision: 3.6 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -77,7 +77,7 @@ my $readme_path = undef;	# if -r readme, this is the absolute src path
 my $readme_dev = undef;		# if -r readme, this is the device number
 my $readme_ino = undef;		# if -r readme, this is the inode number
 my $readme_timestamp = undef;	# if -r readme, this is its special timestamp
-my $max_dup = 10;		# max images with identical named & timestamps
+my $max_dup = 100;		# max images with identical named & timestamps
 
 
 # EXIF timestamp related tag names to look for
@@ -1096,7 +1096,7 @@ sub wanted($)
 #	image filename can be re-constructed.  Consider these filenames:
 #
 #		1215+5627-2545-200505-043-101-pg5v.cr2
-#		1215+5627-2545_1-200505-043-101-pg5v_stuff.cr2
+#		1215+5627-2545_01-200505-043-101-pg5v_stuff.cr2
 #
 #	the original image filenames were:
 #
@@ -1109,7 +1109,7 @@ sub wanted($)
 #
 # If another image was taken during the same second, that 2nd image becomes:
 #
-#	1215+5627-2545_1-200505-043-101-pg5v.cr2
+#	1215+5627-2545_01-200505-043-101-pg5v.cr2
 #
 # is constructed out of the following:
 #
@@ -1121,7 +1121,7 @@ sub wanted($)
 #	25		# image minute of hour (UTC), 2 digits [00-59]
 #	45		# image second of minutes, 2 digits [00-60]
 #	     _		# (underscore) optional for dups in same sec
-#	     1		# optional digits for dups in same sec
+#	     01		# optional digits for dups in same sec
 #	-		# (dash) separator
 #	2005		# image 4 digit Year (UTC)
 #	05		# image month (UTC), 2 digits [01-12]
@@ -1194,9 +1194,9 @@ sub wanted($)
 # Example: If the lowercase name is already of the form:
 #
 #	1215+5627-2545-200505-043-101-pg5v.cr2
-#	1215+5628-2645_1-200505-043-101-pg5v.cr2
+#	1215+5628-2645_01-200505-043-101-pg5v.cr2
 #	043-101-20050512-152745-ls1f5629.cr2
-#	043-101-20050512-152845_1-ls1f5630.cr2
+#	043-101-20050512-152845_01-ls1f5630.cr2
 #
 # we convert it back to:
 #
@@ -1211,7 +1211,7 @@ sub wanted($)
 # Also filenames of the form:
 #
 #	1215+5631-2745-200505-043-101-pg5v_stuff.cr2
-#	1215+5632-2845_1-200505-043-101-pg5v_stuff.cr2
+#	1215+5632-2845_01-200505-043-101-pg5v_stuff.cr2
 #
 # are converted into:
 #
@@ -1232,6 +1232,7 @@ sub set_destname()
     my $yyyymm;		# EXIF or filename timestamp year and month
     my $ddhh;		# EXIF or filename timestamp day and hour
     my $mmss;		# EXIF or filename timestamp minute, second
+    my $dup;		# duplicate timestamp / dest number, 0 ==> no dup
     my $mmss_dup;	# EXIF or filename timestamp minute, second with dup num
     my $err;		# >0 ==> fatal error number, 0 ==> OK
     my $multifound;	# 0 ==> only one .ext found, 1 ==> 2+ .ext found
@@ -1259,200 +1260,142 @@ sub set_destname()
 	    next;
 	}
 
-	# look for duplicates in each element of the pathset
+	# compute the intermediate values based on the pathset timestamp
 	#
-	# Duplicates can arise if the path in the desitions exists.
-	# And to be safe, we make sure that no duplicates arise
-	# in the %destpath_path (hash of files to be created by the
-	# create_destination() function) as well.
+	$timestamp = $pathset_timestamp{$basename_noext};
+	if (! defined $timestamp) {
+	    error(-50, "undef 2nd get of timestamp for $path");
+	    $err = 50;	# delay exit(50);
+	    last;
+	}
+	$yyyymm = strftime("%Y%m", gmtime($timestamp));
+	$ddhh = strftime("%d%H", gmtime($timestamp));
+	$mmss = strftime("%M%S", gmtime($timestamp));
+	$multifound = $need_plus{@{$pathset}[0]};
+	$roll_sub = $path_roll_sub{@{$pathset}[0]};
+	if (! defined $yyyymm || ! defined $ddhh || ! defined $mmss ||
+	    ! defined $multifound) {
+	    error(-51, "undef of some intermediate var for @{$pathset}[0]");
+	    $err = 51;	# delay exit(51);
+	    last;
+	}
+	$roll_sub = "" if ! defined $roll_sub;
+
+	# look for unique filenames for all members of this pathset
 	#
-	# We first will compute the highest $dup duplication value.
-	# A highest $dup valie of 0 means no duplicates were found in the
-	# pathset.
-	#
-	$highest_dup = 0;
 	$pathset_err = 0;
-	foreach $path ( sort @{$pathset} ) {
+	for ($dup = 0; $dup < $max_dup; ++$dup) {
 
-	    my $dup;	# duplicate timestamp / dest number, 0 ==> no dup
-
-	    # get the basename of the source path in lowercase
+	    # debug
 	    #
-	    $srcbase = $path_basenoext{$path};
-	    $lc_srcbase = lc($srcbase);
-
-	    # deal with filenames in old style destination form
-	    #
-	    # If the lowercase name is already of the form:
-	    #
-	    #	043-101-20050512-152545-ls1f5629.cr2
-	    #	043-101-20050512-152545_1-ls1f5630.cr2
-	    #
-	    # convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
-	    # reprocess the destination tree if we want to later on.
-	    #
-	    if ($lc_srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
-		dbg(2, "found old style filename: $lc_srcbase");
-		$lc_srcbase = $2;
-		if ($lc_srcbase =~ /-/) {
-		    $lc_srcbase = s/-/_/g;
-		    dbg(4, "conv -'s to _'s in old srcbase");
-		}
-		dbg(2, "preconverted old style to: $lc_srcbase");
-
-	    # deal with filenames in the new style destination form
-	    #
-	    # If the lowercase name is already of the form:
-	    #
-	    #	1215+5627-2545-200505-043-101-pg5v.cr2
-	    #	1215+5628-2645_1-200505-043-101-pg5v.cr2
-	    #
-	    # convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
-	    # reprocess the destination tree if we want to later on.
-	    #
-	    } elsif ($lc_srcbase =~
-		    m{
-		      \d{4}	 # ddhh
-		      [-+]	# - (dash) or + (plus) separator
-		      ([^-]*)	# $1: sequence number
-		      -		# - (dash) separator
-		      \d{4}	# mmss
-		      (_\d+)?	# $2: opt digits for dups in same sec
-		      \d{6}	# yyyymm
-		      -		# - (dash) separator
-		      [^-]*	# roll number
-		      -		# - (dash) separator
-		      [^-]*	# sub-roll number
-		      -		# - (dash) separator
-		      ([^_.]*)	# $3: image filename chars before seqnum
-		      (_[^.]*)? # $4: optional imagename chars after seq
-		      (\..*)?$	# $5: optional .extension
-		     }ix) {
-		dbg(2, "found new style filename: $lc_srcbase");
-		$lc_srcbase = $3 . $1 . substr($4, 1) . $5;
-		if ($lc_srcbase =~ /-/) {
-		    $lc_srcbase = s/-/_/g;
-		    dbg(4, "conv -'s to _'s in new srcbase");
-		}
-		dbg(2, "preconverted new style to: $lc_srcbase");
-
-	    # -'s (dash) become _'s (underscore) to avoid
-	    # filename field confusion
-	    #
-	    } elsif ($lc_srcbase =~ /-/) {
-		dbg(4, "conv -'s to _'s in srcbase");
-		$lc_srcbase =~ s/-/_/g;
-	    }
-	    # cache the lc_srcbase value
-	    $path_lc_srcbase{$path} = $lc_srcbase;
-
-	    # note the .extension, if any
-	    #
-	    if ($path =~ /\./) {
-		($srcext = lc($path)) =~ s/^.*\././;
+	    if ($dup > 0) {
+		dbg(4, "dup $dup on base $basename_noext");
 	    } else {
-		$srcext = "";
+		dbg(4, "1st try for base $basename_noext");
 	    }
 
-	    # compute the intermediate values based on the pathset timestamp
+	    # look for duplicates in each element of the pathset
 	    #
-	    $timestamp = $pathset_timestamp{$path_basenoext{$path}};
-	    if (! defined $timestamp) {
-		error(-50, "undef 2nd get of timestamp for $path");
-		$err = 50;	# delay exit(50);
-		last;
-	    }
-	    $yyyymm = strftime("%Y%m", gmtime($timestamp));
-	    $ddhh = strftime("%d%H", gmtime($timestamp));
-	    $mmss = strftime("%M%S", gmtime($timestamp));
-	    $multifound = $need_plus{$path};
-	    $roll_sub = $path_roll_sub{$path};
-	    if (! defined $yyyymm || ! defined $ddhh || ! defined $mmss ||
-		! defined $multifound) {
-		error(-51, "undef of some intermediate var for $path");
-		$err = 51;	# delay exit(51);
-		last;
-	    }
-	    $roll_sub = "" if ! defined $roll_sub;
+	    # Duplicates can arise if the path in the desitions exists.
+	    # And to be safe, we make sure that no duplicates arise
+	    # in the %destpath_path (hash of files to be created by the
+	    # create_destination() function) as well.
+	    #
+	    # We first will compute the highest $dup duplication value.
+	    # A highest $dup valie of 0 means no duplicates were found in the
+	    # pathset.
+	    #
+	    foreach $path ( sort @{$pathset} ) {
 
-	    # form the new destination filename
-	    #
-	    # An example of a new destination filename:
-	    #
-	    #	1215+5627-2545-200505-043-101-pg5v.cr2
-	    #
-	    $destbase = $ddhh;
-	    $destbase .= ($multifound ? "+" : "-");
-	    $destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
-	    $destbase .= "-$mmss-$yyyymm-$rollnum-";
-	    $destbase .= substr($roll_sub, $roll_sub_skip,
-				$roll_sub_maxlen);
-	    $destbase .= "-";
-	    $destbase .= substr($lc_srcbase, 0, $mv_end_chars);
-	    if (length($lc_srcbase) > $mv_fwd_chars+$mv_end_chars) {
-		$destbase .= "_";
-		$destbase .= substr($lc_srcbase,
-				    $mv_fwd_chars+$mv_end_chars);
-	    }
-	    $destbase .= $srcext;
-
-	    # firewall - must already have path_destdir
-	    #
-	    if (! defined $path_destdir{$path}) {
-		error(-52, "missing destdir path for: $path");
-		$err = 52;	# delay exit(52)
-		$pathset_err = $err;
-		next;
-	    }
-	    $destpath = $path_destdir{$path};
-
-	    # If there is a collision or if the destination already exists, add
-	    # a _digit after the seconds until we give up.
-	    #
-	    $dup = 0;
-	    dbg(6, "will test for existence of: $destpath/$destbase");
-	    while (!defined $opt_o &&
-		    (defined $destpath_path{"$destpath/$destbase"} ||
-		     -e "$destpath/$destbase")) {
-
-		# see if we have more duplicates
+		# get the basename of the source path in lowercase
 		#
-		++$dup;
-		if ($dup >= $max_dup) {
-		    error(-53, "dup: $dup >= max_dup: $max_dup, unable to " .
-			       "form a unique destination filename for " .
-			       $destpath);
-		    $err = 53;	# delay exit(53);
-		    $pathset_err = $err;
-		    if ($dup > $highest_dup) {
-			$highest_dup = $dup;
+		$srcbase = $path_basenoext{$path};
+		$lc_srcbase = lc($srcbase);
+
+		# deal with filenames in old style destination form
+		#
+		# If the lowercase name is already of the form:
+		#
+		#	043-101-20050512-152545-ls1f5629.cr2
+		#	043-101-20050512-152545_01-ls1f5630.cr2
+		#
+		# convert it to just ls1f5629.cr2 and ls1f5630.cr2 so we can
+		# reprocess the destination tree if we want to later on.
+		#
+		if ($lc_srcbase =~ /^\d{3}-[^-]*-\d{8}-\d{6}(_\d+)?-(.*)$/) {
+		    dbg(2, "found old style filename: $lc_srcbase");
+		    $lc_srcbase = $2;
+		    if ($lc_srcbase =~ /-/) {
+			$lc_srcbase = s/-/_/g;
+			dbg(4, "conv -'s to _'s in old srcbase");
 		    }
-		    last;
-		}
-		$mmss_dup = $mmss . "_" . $dup;
+		    dbg(2, "preconverted old style to: $lc_srcbase");
 
-		# debug
+		# deal with filenames in the new style destination form
 		#
-		if (defined $destpath_path{$destpath}) {
-		    dbg(4, "already creating $destpath, " .
-			   "selecting another name with dup: $dup");
-		} elsif (-e "$destpath/$destbase") {
-		    dbg(4, "desitnation exists $destpath/$destpath, " .
-			   "selecting another name with dup: $dup");
+		# If the lowercase name is already of the form:
+		#
+		#	1215+5627-2545-200505-043-101-pg5v.cr2
+		#	1215+5628-2645_01-200505-043-101-pg5v.cr2
+		#
+		# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
+		# reprocess the destination tree if we want to later on.
+		#
+		} elsif ($lc_srcbase =~
+			m{
+			  \d{4}	 # ddhh
+			  [-+]	# - (dash) or + (plus) separator
+			  ([^-]*)	# $1: sequence number
+			  -		# - (dash) separator
+			  \d{4}	# mmss
+			  (_\d+)?	# $2: opt digits for dups in same sec
+			  \d{6}	# yyyymm
+			  -		# - (dash) separator
+			  [^-]*	# roll number
+			  -		# - (dash) separator
+			  [^-]*	# sub-roll number
+			  -		# - (dash) separator
+			  ([^_.]*)	# $3: image filename chars before seqnum
+			  (_[^.]*)? # $4: optional imagename chars after seq
+			  (\..*)?$	# $5: optional .extension
+			 }ix) {
+		    dbg(2, "found new style filename: $lc_srcbase");
+		    $lc_srcbase = $3 . $1 . substr($4, 1) . $5;
+		    if ($lc_srcbase =~ /-/) {
+			$lc_srcbase = s/-/_/g;
+			dbg(4, "conv -'s to _'s in new srcbase");
+		    }
+		    dbg(2, "preconverted new style to: $lc_srcbase");
+
+		# -'s (dash) become _'s (underscore) to avoid
+		# filename field confusion
+		#
+		} elsif ($lc_srcbase =~ /-/) {
+		    dbg(4, "conv -'s to _'s in srcbase");
+		    $lc_srcbase =~ s/-/_/g;
+		}
+		# cache the lc_srcbase value
+		$path_lc_srcbase{$path} = $lc_srcbase;
+
+		# note the .extension, if any
+		#
+		if ($path =~ /\./) {
+		    ($srcext = lc($path)) =~ s/^.*\././;
 		} else {
-		    error(-54, "in collision loop, no defined destpath_path " .
-			       "and desitnation does not exist");
-		    $err = 54;	# delay exit(54);
-		    $pathset_err = $err;
-		    last;
+		    $srcext = "";
 		}
 
-		# form the new destination filename avoiding an existing name
+		# form the new destination filename
 		#
 		# An example of a new destination filename:
 		#
-		#	1215+5627-2545_1-200505-043-101-pg5v.cr2
+		#	1215+5627-2545-200505-043-101-pg5v.cr2
 		#
+		if ($dup > 0) {
+		    $mmss_dup = $mmss . "_" . sprintf("%02d", $dup);
+		} else {
+		    $mmss_dup = $mmss;
+		}
 		$destbase = $ddhh;
 		$destbase .= ($multifound ? "+" : "-");
 		$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
@@ -1467,18 +1410,53 @@ sub set_destname()
 					$mv_fwd_chars+$mv_end_chars);
 		}
 		$destbase .= $srcext;
-		dbg(6, "also test for existence of: $destpath/$destbase");
-	    }
-	    if ($dup > 0) {
-		dbg(3, "for $destpath, dup: $dup");
+
+		# firewall - must already have path_destdir
+		#
+		if (! defined $path_destdir{$path}) {
+		    error(-52, "missing destdir path for: $path");
+		    $err = 52;	# delay exit(52)
+		    $pathset_err = $err;
+		    last;
+		}
+		$destpath = $path_destdir{$path};
+
+		# look for a collision unless -o
+		#
+		if (! defined $opt_o) {
+		    if (defined $destpath_path{$destpath}) {
+			dbg(4, "already creating $destpath/$destbase");
+			last;
+		    } elsif (-e "$destpath/$destbase") {
+			dbg(4, "destination exists $destpath/$destbase");
+			last;
+		    }
+		}
 	    }
 
-	    # keep track of the the highest $dup value
+	    # We fininished processing the pathset, determine why
+	    # we finished
 	    #
-	    if ($dup > $highest_dup) {
+	    # If there was a pathset_err, then we can do nothing else
+	    # with this pathset.
+	    #
+	    if ($pathset_err != 0) {
+		last;
+
+	    # If there was a collision and no -o, then try for the
+	    # next dup number
+	    #
+	    } elsif (! defined $opt_o &&
+	     	     (defined $destpath_path{$destpath} ||
+		      -e "$destpath/$destbase")) {
+		next;
+
+	    # No errors AND either there was no dup or we have -o, so
+	    # we can now compute filenames for this pathset
+	    #
+	    } else {
 		$highest_dup = $dup;
-		dbg(3, "for pathset: $basename_noext, we have a new " .
-		       "highest dup: $highest_dup");
+		last;
 	    }
 	}
 
@@ -1543,7 +1521,7 @@ sub set_destname()
 		# dup level for all members of the pathset
 		#
 		if ($highest_dup > 0) {
-		    $mmss_dup = $mmss . "_" . $highest_dup;
+		    $mmss_dup = $mmss . "_" . sprintf("%02d", $highest_dup);
 		} else {
 		    $mmss_dup = $mmss;
 		}
