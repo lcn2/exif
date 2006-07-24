@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.11 $
-# @(#) $Id: exifrename.pl,v 3.11 2006/07/24 16:24:16 chongo Exp chongo $
+# @(#) $Revision: 3.12 $
+# @(#) $Id: exifrename.pl,v 3.12 2006/07/24 23:14:06 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.11 $, 10;
+my $VERSION = substr q$Revision: 3.12 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -178,7 +178,7 @@ my $help = qq{\n$usage
 
     -a		 don't abort/exit after post-setup fatal errors (def: do)
     -c		 don't verify/compare files after they are copied (def: do)
-    -e exifroll	 only read roll num in exifroll (def: use & update ~/.exifroll)
+    -e exifroll	 use/update roll num in exifroll (def: use/update ~/.exifroll)
     -k roll_subskip	 skip the leading roll_subskip chars (def: 0)
     -m		 move, do not copy files from srcdir to destdir (def: copy)
     -n rollnum	 roll is rollnum, don't update exifroll (def: use ~/exifroll)
