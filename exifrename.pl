@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.10 $
-# @(#) $Id: exifrename.pl,v 3.10 2006/07/24 16:21:57 chongo Exp chongo $
+# @(#) $Revision: 3.11 $
+# @(#) $Id: exifrename.pl,v 3.11 2006/07/24 16:24:16 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.10 $, 10;
+my $VERSION = substr q$Revision: 3.11 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -1037,16 +1037,19 @@ sub wanted($)
 	#
 	} elsif ($roll_sub =~ /^\d{3}-(\d{3})$/) {
 	    $roll_sub = $1;
-	    dbg(4, "converted roll-roll_sub as roll_sub: $roll_sub");
+	    dbg(4, "converted roll-roll_sub to: $roll_sub");
+	} elsif ($roll_sub =~ /^\d{3}-$/) {
+	    $roll_sub = undef;
+	    dbg(4, "converted roll- into undef");
 	} elsif ($roll_sub =~ /^\d{6}-\d{3}-(\d{3})$/) {
 	    $roll_sub = $1;
-	    dbg(4, "converted yyyymm-roll-roll_sub as roll_sub: $roll_sub");
+	    dbg(4, "converted yyyymm-roll-roll_sub to: $roll_sub");
 	} elsif ($roll_sub =~ /^\d{6}-\d{3}-$/) {
 	    $roll_sub = undef;
-	    dbg(4, "using yyyymm-roll- to undef");
+	    dbg(4, "converted yyyymm-roll- into undef");
 	} elsif ($roll_sub =~ /^\d{6}-\d{3}$/) {
 	    $roll_sub = undef;
-	    dbg(4, "using yyyymm-roll to undef");
+	    dbg(4, "converted yyyymm-roll into undef");
 
 	# if we have a roll_sub, canonicalize it
 	#
