@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.7 $
-# @(#) $Id: exifrename.pl,v 3.7 2006/07/22 01:38:16 chongo Exp chongo $
+# @(#) $Revision: 3.8 $
+# @(#) $Id: exifrename.pl,v 3.8 2006/07/22 03:51:32 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.7 $, 10;
+my $VERSION = substr q$Revision: 3.8 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -143,6 +143,13 @@ my @exif_ext = qw(
 #	NOTE: Useful in conjunction with -d to note when we might have
 #	      already created a directory.
 #
+# $destpath_path{"$path_destdir{$path}/$path_destfile{$path}"}
+#	key: destinaion directory/filename
+#	value: source path
+#	NOTE: This is used to detect when multiple source files are be targeted
+#	      to the same destination file.  This can happen when we are
+#	      converting old or new filename formats.
+#
 my %path_basenoext;
 my %path_roll_sub;
 my %devino_path;
@@ -153,6 +160,7 @@ my %pathset_timestamp;
 my %path_destdir;
 my %path_destfile;
 my %have_mkdir;
+my %destpath_path;
 
 # timestamps prior to:
 #	Tue Nov	 5 00:53:20 1985 UTC
@@ -1441,6 +1449,9 @@ sub set_destname()
 		    if (-e "$destpath/$destbase") {
 			dbg(4, "destination exists $destpath/$destbase");
 			last;
+		    } elsif (defined $destpath_path{"$destpath/$destbase"}) {
+			dbg(4, "planning to create $destpath/$destbase");
+			last;
 		    }
 		}
 	    }
@@ -1457,7 +1468,9 @@ sub set_destname()
 	    # If there was a collision and no -o, then try for the
 	    # next dup number
 	    #
-	    } elsif (! defined $opt_o && -e "$destpath/$destbase") {
+	    } elsif (! defined $opt_o &&
+	    	     (-e "$destpath/$destbase" ||
+		      defined $destpath_path{"$destpath/$destbase"})) {
 		next;
 
 	    # No errors AND either there was no dup or we have -o, so
@@ -1552,6 +1565,7 @@ sub set_destname()
 		# note our final destination filename
 		#
 		$path_destfile{$path} = $destbase;
+		$destpath_path{"$destpath/$destbase"} = $path;
 		dbg(2, "src: $path will become: $destpath/$destbase");
 	    }
 	}
