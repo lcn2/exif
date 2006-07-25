@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.16 $
-# @(#) $Id: exifrename.pl,v 3.16 2006/07/25 05:17:23 chongo Exp chongo $
+# @(#) $Revision: 3.17 $
+# @(#) $Id: exifrename.pl,v 3.17 2006/07/25 07:15:58 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.16 $, 10;
+my $VERSION = substr q$Revision: 3.17 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -1883,7 +1883,7 @@ sub exif_date($)
 #	# date: YYYY.MM.dd hh:mm:ss
 #	xx    x		  xxxxxxxxx	       <== x's mark optional fields
 #
-# NOTE: hh:mm:ss default to 12:00:00 if it is not given
+# NOTE: hh:mm:ss default to 00:00:00 if it is not given
 #
 # The match is case insensitive.  The leading #(whitespace) is optional.
 # The Xyz (day of week) is optional.  The ABC timezone field is optional.
@@ -2019,7 +2019,7 @@ sub text_date($)
 	#	# date: YYYY.MM.dd hh:mm:ss
 	#	xx    x		  xxxxxxxxxxxx	   <== x's mark optional fields
 	#
-	# NOTE: hh:mm:ss default to 12:00:00 if it is not given
+	# NOTE: hh:mm:ss default to 00:00:00 if it is not given
 	#
 	} elsif ($line =~  m{
 		      ^
@@ -2054,7 +2054,7 @@ sub text_date($)
 		$sec = $3;
 	    } else {
 		# no time of day, use noon
-		$hour = 12;
+		$hour = 0;
 		$min = 0;
 		$sec = 0;
 	    }
