@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.14 $
-# @(#) $Id: exifrename.pl,v 3.14 2006/07/24 23:33:58 chongo Exp chongo $
+# @(#) $Revision: 3.15 $
+# @(#) $Id: exifrename.pl,v 3.15 2006/07/24 23:47:56 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.14 $, 10;
+my $VERSION = substr q$Revision: 3.15 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -1110,7 +1110,7 @@ sub wanted($)
 #	/destdir			# destdir path of image library
 #	/200505				# image year & month
 #	/200505-043-010			# year & month, -, roll, -, roll-subdir
-#	/1215+5627-2545-200505-043-101-pg5v.cr2 # image filename (see below)
+#	/1215-5627+2545-200505-043-101-pg5v.cr2 # image filename (see below)
 #
 # NOTE: The property of directory names under /destdir that they are
 #	unique and standalone.	 One can look at one of these sub-directories
@@ -1124,8 +1124,8 @@ sub wanted($)
 # NOTE: Another important property of a filename is that the original
 #	image filename can be re-constructed.  Consider these filenames:
 #
-#		1215+5627-2545-200505-043-101-pg5v.cr2
-#		1215+5627-2545_01-200505-043-101-pg5v_stuff.cr2
+#		1215-5627+2545-200505-043-101-pg5v.cr2
+#		1215-5627+2545_01-200505-043-101-pg5v_stuff.cr2
 #
 #	the original image filenames were:
 #
@@ -1134,19 +1134,19 @@ sub wanted($)
 #
 # Consider this filename:
 #
-#	1215+5627-2545-200505-043-101-pg5v.cr2
+#	1215-5627+2545-200505-043-101-pg5v.cr2
 #
 # If another image was taken during the same second, that 2nd image becomes:
 #
-#	1215+5627-2545_01-200505-043-101-pg5v.cr2
+#	1215-5627+2545_01-200505-043-101-pg5v.cr2
 #
 # is constructed out of the following:
 #
 #	12		# image day of month (UTC), 2 digits [01-31]
 #	15		# image hour (UTC), 2 digits [00-23]
-#	- or +		# - ==> has no sound file, + has sound file
-#	5627		# image sequence number (see NOTE below)
 #	-		# (dash) separator
+#	5627		# image sequence number (see NOTE below)
+#	- or +		# - ==> has no sound file, + has sound file
 #	25		# image minute of hour (UTC), 2 digits [00-59]
 #	45		# image second of minutes, 2 digits [00-60]
 #	     _		# (underscore) optional for dups in same sec
@@ -1222,8 +1222,8 @@ sub wanted($)
 #
 # Example: If the lowercase name is already of the form:
 #
-#	1215+5627-2545-200505-043-101-pg5v.cr2
-#	1215+5628-2645_01-200505-043-101-pg5v.cr2
+#	1215-5627+2545-200505-043-101-pg5v.cr2
+#	1215-5628+2645_01-200505-043-101-pg5v.cr2
 #	043-101-20050512-152745-ls1f5629.cr2
 #	043-101-20050512-152845_01-ls1f5630.cr2
 #
@@ -1239,8 +1239,8 @@ sub wanted($)
 #
 # Also filenames of the form:
 #
-#	1215+5631-2745-200505-043-101-pg5v_stuff.cr2
-#	1215+5632-2845_01-200505-043-101-pg5v_stuff.cr2
+#	1215-5631+2745-200505-043-101-pg5v_stuff.cr2
+#	1215-5632+2845_01-200505-043-101-pg5v_stuff.cr2
 #
 # are converted into:
 #
@@ -1360,18 +1360,30 @@ sub set_destname()
 		#
 		# If the lowercase name is already of the form:
 		#
-		#	1215+5627-2545-200505-043-101-pg5v.cr2
-		#	1215+5628-2645_01-200505-043-101-pg5v.cr2
+		#	1215-5627+2545-200505-043-101-pg5v.cr2
+		#	1215-5628+2645_01-200505-043-101-pg5v.cr2
 		#
 		# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
 		# reprocess the destination tree if we want to later on.
+		#
+		# NOTE: For a brief period of time, the + was in front
+		#	of the sequence number instead of behind it.
+		#	The "in front of" filename convention was discarded
+		#	because when a directory was alphanumerically
+		#	sorted, the + files moved to the bottom.  Now
+		#	with it behind the sequence number, the files
+		#	stay in ddhh-sequence order.
+		#
+		# NOTE: We match on + or - both in front of and behind
+		#	the sequence number so that we can convert from
+		#	the before files to the after files.
 		#
 		} elsif ($lc_srcbase =~
 			m{
 			  \d{4}		# ddhh
 			  [-+]		# - (dash) or + (plus) separator
 			  ([^-]*)	# $1: sequence number
-			  -		# - (dash) separator
+			  [-+]		# - (dash) or + (plus) separator
 			  \d{4}		# mmss
 			  (_\d+)?	# $2: opt digits for dups in same sec
 			  -		# - (dash) separator
@@ -1423,9 +1435,10 @@ sub set_destname()
 		    $mmss_dup = $mmss;
 		}
 		$destbase = $ddhh;
-		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= "-";
 		$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
-		$destbase .= "-$mmss_dup-$yyyymm-$rollnum-";
+		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= "$mmss_dup-$yyyymm-$rollnum-";
 		$destbase .= substr($roll_sub, $roll_sub_skip,
 				    $roll_sub_maxlen);
 		$destbase .= "-";
@@ -1552,9 +1565,10 @@ sub set_destname()
 		    $mmss_dup = $mmss;
 		}
 		$destbase = $ddhh;
-		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= "-";
 		$destbase .= substr($lc_srcbase, $mv_end_chars, $mv_fwd_chars);
-		$destbase .= "-$mmss_dup-$yyyymm-$rollnum-";
+		$destbase .= ($multifound ? "+" : "-");
+		$destbase .= "$mmss_dup-$yyyymm-$rollnum-";
 		$destbase .= substr($roll_sub, $roll_sub_skip,
 				    $roll_sub_maxlen);
 		$destbase .= "-";
