@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.15 $
-# @(#) $Id: exifrename.pl,v 3.15 2006/07/24 23:47:56 chongo Exp chongo $
+# @(#) $Revision: 3.16 $
+# @(#) $Id: exifrename.pl,v 3.16 2006/07/25 05:17:23 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.15 $, 10;
+my $VERSION = substr q$Revision: 3.16 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -254,6 +254,8 @@ MAIN:
     #
     $opt_v = 0;
     $ENV{HOME} = "/" unless defined $ENV{HOME};
+    # must be in UTC timezone so that filename timestamps work correctly!
+    $ENV{TZ} = "UTC";
     $rollfile = "$ENV{HOME}/.exifroll";
 
     # parse args
