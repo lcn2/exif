@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.17 $
-# @(#) $Id: exifrename.pl,v 3.17 2006/07/25 07:15:58 chongo Exp chongo $
+# @(#) $Revision: 3.18 $
+# @(#) $Id: exifrename.pl,v 3.18 2006/07/25 19:23:54 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.17 $, 10;
+my $VERSION = substr q$Revision: 3.18 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -2309,12 +2309,12 @@ sub create_destination()
 	# set the access and modification time unless -t
 	#
 	if (! defined $opt_t) {
-	    if (! $opt_d &&
-		utime $timestamp, $timestamp, $destpath < 1) {
+	    if (! $opt_d && utime($timestamp, $timestamp, $destpath) < 1) {
 		error(-89, "compare of $path and $destpath failed");
 		$err = 119;	# delayed exit(89)
 		next;
 	    }
+	    dbg(3, "utime($timestamp, $timestamp, $destpath)");
 	}
 	dbg(1, "created: $destpath");
     }
