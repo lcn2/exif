@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.19 $
-# @(#) $Id: exifrename.pl,v 3.19 2006/07/25 19:30:55 chongo Exp chongo $
+# @(#) $Revision: 3.20 $
+# @(#) $Id: exifrename.pl,v 3.20 2006/07/27 00:44:47 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.19 $, 10;
+my $VERSION = substr q$Revision: 3.20 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
