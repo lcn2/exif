@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 3.20 $
-# @(#) $Id: exifrename.pl,v 3.20 2006/07/27 00:44:47 chongo Exp chongo $
+# @(#) $Revision: 4.2 $
+# @(#) $Id: exifrename.pl,v 4.2 2006/07/30 07:37:01 chongo Exp $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 3.20 $, 10;
+my $VERSION = substr q$Revision: 4.2 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -232,7 +232,7 @@ sub form_dir($);
 sub roll_setup();
 sub create_destination();
 sub readme_check($);
-sub create_readme_symlink();
+sub create_readme_link();
 sub set_timestamps();
 sub warning($);
 sub error($$);
@@ -328,10 +328,10 @@ MAIN:
     #
     create_destination();
 
-    # create readme.txt symlink if -r readme was given
+    # create readme.txt link if -r readme was given
     #
     if ($opt_r) {
-	create_readme_symlink();
+	create_readme_link();
     }
 
     # all done
@@ -736,7 +736,7 @@ sub dir_setup()
 #	.((anything))		# files and dirs that start with .
 #
 # In addition, for path purposes, we do not create DCIM as a path component
-# when forming files and symlinks in destdir.
+# when forming files and links in destdir.
 #
 ####
 #
@@ -2391,20 +2391,20 @@ sub readme_check($)
 }
 
 
-# create_readme_symlink - setup the readme.txt symlink
+# create_readme_link - setup the readme.txt link
 #
-sub create_readme_symlink()
+sub create_readme_link()
 {
-    my $sympath;	# where the symlink points to (the readinfome.txt file)
     my $readme_txt;	# path to the readme.txt file
+    my $inforeadme;	# existing readinfome file to be linked to readme.txt
 
-    # determine the symlink filename
+    # determine readme.txt file we will link to
     #
     $readme_txt = "$path_destdir{$readme_path}/readme.txt";
     if ($readme_txt =~ /$untaint/o) {
 	$readme_txt = $1;
     } else {
-	error(130 * ($opt_a?-1:1), "bogus chars in readme.txt symlink file");
+	error(130 * ($opt_a?-1:1), "bogus chars in readme.txt path");
     	return;
     }
 
@@ -2421,19 +2421,19 @@ sub create_readme_symlink()
 	}
     }
 
-    # create the symlink
+    # create the link
     #
-    $sympath = "$path_destdir{$readme_path}/$path_destfile{$readme_path}";
-    if ($sympath =~ /$untaint/o) {
-	$sympath = $1;
+    $inforeadme = "$path_destdir{$readme_path}/$path_destfile{$readme_path}";
+    if ($inforeadme =~ /$untaint/o) {
+	$inforeadme = $1;
     } else {
-	error(132 * ($opt_a?-1:1), "bogus chars in readme.txt symlink path");
+	error(132 * ($opt_a?-1:1), "bogus chars in inforeadme path");
     	return;
     }
+    dbg(1, "ln $inforeadme $readme_txt");
     if (! $opt_d) {
-	dbg(2, "ln -s $sympath $readme_txt");
-	if (! symlink($sympath , $readme_txt)) {
-	    error(133 * ($opt_a?-1:1), "symlink failed: $!");
+	if (! link($inforeadme , $readme_txt)) {
+	    error(133 * ($opt_a?-1:1), "link failed: $!");
 	}
     }
     return;
