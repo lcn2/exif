@@ -3,7 +3,7 @@
 # exifrename - copy files based on EXIF or file time data
 #
 # @(#) $Revision: 4.2 $
-# @(#) $Id: exifrename.pl,v 4.2 2006/07/30 07:37:01 chongo Exp $
+# @(#) $Id: exifrename.pl,v 4.2 2007/01/06 09:15:31 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -223,7 +223,7 @@ my %optctl = (
 sub parse_args();
 sub destdir_path($$$);
 sub dir_setup();
-sub wanted();
+sub wanted($);
 sub set_destname();
 sub get_timestamp($$);
 sub exif_date($);
@@ -2276,62 +2276,6 @@ sub create_destination()
     }
     exit($err) if ($err != 0);
     return;
-}
-
-
-# readme_check - check the -r readme filename given
-#
-# given:
-#	$readme		# -r readme file to check
-#
-# returns:
-#	absolute path of the readme file
-#
-# NOTE: This function also sets the global $readme_timestamp value.
-#
-# NOTE: This function exits if there are any problems.
-#
-# NOTE: This function is expected to be called from main
-#	soon after arg parsing.
-#
-sub readme_check($)
-{
-    my ($readme) = @_;		# get args
-    my $exitcode;		# return code from text_date
-    my $message;		# timestamp or error message
-    my $ret;			# absolute path of readme file
-
-    # -r $readme file must be a readable file
-    #
-    if (! -e $readme) {
-	error(110, "-r $readme does not exist");
-    }
-    if (! -f $readme) {
-	error(111, "-r $readme is not a file");
-    }
-    if (! -r $readme) {
-	error(112, "-r $readme is not readable");
-    }
-
-    # must have a text date
-    #
-    ($exitcode, $message) = text_date($readme);
-    if ($exitcode != 0) {
-	error(-113, "-r $readme does not have a date timestamp line");
-	error(113,  "try adding '# date: yyyy-mm-dd' line to $readme");
-    }
-
-    # same the timestamp for later
-    #
-    $readme_timestamp = $message;
-
-    # return the absolute path of readme
-    #
-    $ret = abs_path($readme);
-    if (! defined $ret) {
-	error(114, "cannot determine absolute path of $readme");
-    }
-    return $ret;
 }
 
 
