@@ -1292,7 +1292,7 @@ sub set_destname()
     # process all paths
     #
     $err = 0;
-    $forget = 1;
+    $forget = 0;
     foreach $basename_noext ( sort keys %basenoext_pathset ) {
 
 	# get the current pathset
@@ -1685,14 +1685,17 @@ sub get_timestamp($$)
 	    ($exitcode, $message) = exif_date($path);
 
 	    # it is OK to fail, but if we have a good time, track oldest
-	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest) {
-		dbg(4, "get_timestamp EXIF type: $path EXIF time: $message");
-		$oldest = $message;
-		$oldest_exif = $path;
-	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest) {
-		dbg(4, "get_timestamp EXIF type: $path " .
-		       "older EXIF time: $message");
-	    } elsif ($exitcode != 0) {
+	    if ($exitcode == 0) {
+	        if ($oldest == 0 || $message < $oldest) {
+		    dbg(4, "get_timestamp EXIF type: $path" .
+			    " EXIF time: $message");
+		    $oldest = $message;
+		    $oldest_exif = $path;
+		} elsif ($oldest > 0 || $message < $oldest) {
+		    dbg(4, "get_timestamp EXIF type: $path " .
+			   "older EXIF time: $message");
+		}
+	    } else  {
 		dbg(6, "non-fatal/non-warn exif_date error " .
 		       "code $exitcode: $message");
 	    }
@@ -1721,15 +1724,17 @@ sub get_timestamp($$)
 	    ($exitcode, $message) = exif_date($path);
 
 	    # it is OK to fail, but if we have a good time, track oldest
-	    if ($exitcode == 0 && $oldest == 0 || $message < $oldest) {
-		dbg(4, "get_timestamp non-EXIF type: $path " .
-		       "EXIF time: $message");
-		$oldest = $message;
-		$oldest_exif = $path;
-	    } elsif ($exitcode == 0 && $oldest > 0 || $message < $oldest) {
-		dbg(4, "get_timestamp non-EXIF type: $path " .
-		       "older EXIF time: $message");
-	    } elsif ($exitcode != 0) {
+	    if ($exitcode == 0) {
+	        if ($oldest == 0 || $message < $oldest) {
+		    dbg(4, "get_timestamp non-EXIF type: $path " .
+			   "EXIF time: $message");
+		    $oldest = $message;
+		    $oldest_exif = $path;
+		} elsif ($oldest > 0 || $message < $oldest) {
+		    dbg(4, "get_timestamp non-EXIF type: $path " .
+			   "older EXIF time: $message");
+		}
+	    } else {
 		dbg(6, "non-fatal/non-warn exif_date error " .
 		       "code $exitcode: $message");
 	    }
