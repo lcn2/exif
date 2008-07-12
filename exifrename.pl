@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.2 $
-# @(#) $Id: exifrename.pl,v 4.2 2007/01/06 09:15:31 chongo Exp chongo $
+# @(#) $Revision: 4.3 $
+# @(#) $Id: exifrename.pl,v 4.3 2007/12/29 03:30:53 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -35,7 +35,7 @@
 use strict;
 use bytes;
 use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
-	    $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k $opt_d);
+	    $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k $opt_d $opt_u);
 use Getopt::Long;
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.2 $, 10;
+my $VERSION = substr q$Revision: 4.3 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -172,8 +172,8 @@ my $mintime = 500000000;
 # usage and help
 #
 my $usage = "$0 [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n".
-    "	 [-o] [-r readme] [-s roll_sublen] [-t] [-y seqlen] [-z skchars]\n" .
-    "	 [-h] [-d] [-v lvl] srcdir destdir";
+    "  [-o] [-r readme] [-s roll_sublen] [-t] [-u] [-y seqlen] [-z skchars]\n" .
+    "  [-h] [-d] [-v lvl] srcdir destdir";
 my $help = qq{\n$usage
 
     -a		 don't abort/exit after post-setup fatal errors (def: do)
@@ -186,6 +186,7 @@ my $help = qq{\n$usage
     -r readme	 add readme as if it was srcdir/readme.txt (def: don't)
     -s roll_sublen	max length of roll_sub (def: 3, 0 ==> unlimited)
     -t		 don't touch modtime to match EXIF/file image (def: do)
+    -u		 update only, ignore src if dest has same length (def: don't)
     -y seqlen	 sequence length, image filename chars after skchars (def: 4)
     -z skchars	 initial image-name chars not part of sequence number (def: 4)
 
@@ -212,6 +213,7 @@ my %optctl = (
     "r=s" => \$opt_r,
     "t" => \$opt_t,
     "s=i" => \$opt_s,
+    "u" => \$opt_u,
     "v=i" => \$opt_v,
     "y=i" => \$opt_y,
     "z=i" => \$opt_z,
@@ -234,6 +236,7 @@ sub create_destination();
 sub readme_check($);
 sub create_readme_link();
 sub set_timestamps();
+sub forget_path($);
 sub warning($);
 sub error($$);
 sub dbg($$);
@@ -383,6 +386,9 @@ sub parse_args()
     if (defined $opt_z && $opt_z < 0) {
 	error(9, "-z skchars must be >= 0");
     }
+    if (defined $opt_u && defined $opt_o) {
+	error(10, "-o conflicts with -u");
+    }
 
     # set values based on options
     #
@@ -416,10 +422,11 @@ sub parse_args()
       (defined $opt_k ? " -k $opt_k" : "") .
       (defined $opt_m ? " -m" : "") .
       (defined $opt_n ? " -n $opt_n" : "") .
-      (defined $opt_m ? " -o" : "") .
+      (defined $opt_o ? " -o" : "") .
       (defined $opt_r ? " -r $opt_r" : "") .
       (defined $opt_s ? " -s $opt_s" : "") .
       (defined $opt_t ? " -t" : "") .
+      (defined $opt_u ? " -u" : "") .
       (defined $opt_v ? " -v $opt_v" : "") .
       (defined $opt_y ? " -y $opt_y" : "") .
       (defined $opt_z ? " -z $opt_z" : "") .
@@ -444,6 +451,9 @@ sub parse_args()
     if ($opt_r) {
 	dbg(1, "will special process readme file: $opt_r");
     }
+    if ($opt_u) {
+	dbg(1, "will ignore src if dest file exists with same length");
+    }
     dbg(1, "srcdir: $srcdir");
     dbg(1, "destdir: $destdir");
 
@@ -454,19 +464,19 @@ sub parse_args()
 	dbg(1, "-r readme file is sane: $opt_r");
 	($readme_dev, $readme_ino,) = stat($readme_path);
 	if (! defined $readme_dev || ! defined $readme_ino) {
-	    error(10, "stat error on $readme_path: $!");
+	    error(11, "stat error on $readme_path: $!");
 	}
 	if (!defined $readme_path) {
-	    error(11, "-r $opt_r but we have no readme_path");
+	    error(12, "-r $opt_r but we have no readme_path");
 	}
 	if (!defined $readme_path) {
-	    error(12, "-r $opt_r but we have no readme_timestamp");
+	    error(13, "-r $opt_r but we have no readme_timestamp");
 	}
 	if (!defined $readme_dev) {
-	    error(13, "-r $opt_r but we have no readme_dev");
+	    error(14, "-r $opt_r but we have no readme_dev");
 	}
 	if (!defined $readme_ino) {
-	    error(14, "-r $opt_r but we have no readme_ino");
+	    error(15, "-r $opt_r but we have no readme_ino");
 	}
     }
 
@@ -475,17 +485,17 @@ sub parse_args()
     if ($srcdir =~ /$untaint/o) {
 	$srcdir = $1;
     } else {
-	error(15, "bogus chars in srcdir");
+	error(16, "bogus chars in srcdir");
     }
     if ($destdir =~ /$untaint/o) {
 	$destdir = $1;
     } else {
-	error(16, "bogus chars in destdir");
+	error(17, "bogus chars in destdir");
     }
     if ($rollfile =~ /$untaint/o) {
 	$rollfile = $1;
     } else {
-	error(17, "bogus chars in -e filename");
+	error(18, "bogus chars in -e filename");
     }
 }
 
@@ -1259,8 +1269,8 @@ sub wanted($)
 sub set_destname()
 {
     my $basename_noext; # pathset basename without .extension
-    my $pathset;	# array of parts from a single %basenoext_pathset
     my $path;		# a path in the pathset
+    my $pathset;	# array of parts from a single %basenoext_pathset
     my $srcbase;	# basename of the source path
     my $lc_srcbase;	# lowercase basename of the source path
     my $destbase;	# basename of the destination path
@@ -1277,10 +1287,12 @@ sub set_destname()
     my $highest_dup;	# highest dup timestamp / dest number, 0 ==> no dups
     my $pathset_err;	# 0 ==> pathset is OK, != 0 ==> the $err of a member
     my %path_lc_srcbase;	# key: paths value: cached lc_srcbase value
+    my $forget;		# 1 ==> forget the current path
 
     # process all paths
     #
     $err = 0;
+    $forget = 1;
     foreach $basename_noext ( sort keys %basenoext_pathset ) {
 
 	# get the current pathset
@@ -1299,7 +1311,7 @@ sub set_destname()
 	#
 	$timestamp = $pathset_timestamp{$basename_noext};
 	if (! defined $timestamp) {
-	    error(-50, "undef 2nd get of timestamp for $path");
+	    error(-50, "undef 2nd get of timestamp for $basename_noext");
 	    $err = 50;	# delay exit(50);
 	    last;
 	}
@@ -1451,9 +1463,24 @@ sub set_destname()
 		}
 		$destpath = $path_destdir{$path};
 
+		# if -u, a collision is only if dest exists with
+		# different length
+		#
+		if (defined $opt_u &&
+		    -e $path && -e "$destpath/$destbase" &&
+		    (-s $path == -s "$destpath/$destbase")) {
+		    dbg(1, "ignoring already copied: $path");
+		    dbg(4, "src length: " . (-s $path));
+		    dbg(4, "dest length: " . (-s "$destpath/$destbase"));
+		    forget_path($basename_noext);
+		    $forget = 1;
+		    last;
+		}
+
 		# look for a collision unless -o
 		#
 		if (! defined $opt_o) {
+		    # -o colission processing
 		    if (-e "$destpath/$destbase") {
 			dbg(4, "destination exists $destpath/$destbase");
 			last;
@@ -1473,8 +1500,14 @@ sub set_destname()
 	    if ($pathset_err != 0) {
 		last;
 
+	    # if we forgot this path, do nothing else with it
+	    #
+	    } elsif ($forget) {
+	    	last;
+
 	    # If there was a collision and no -o, then try for the
-	    # next dup number
+	    # next dup number, unless -u in which case we don't treat it
+	    # as a collision - just ifnore this pathset
 	    #
 	    } elsif (! defined $opt_o &&
 		     (-e "$destpath/$destbase" ||
@@ -1490,11 +1523,18 @@ sub set_destname()
 	    }
 	}
 
+	# if we forgot the last path, move on to the next path
+	#
+	if ($forget) {
+	    # stop forgetting
+	    $forget = 0;
+	    next;
+
 	# If we failed to find a unique dup value for this pastset,
 	# of it we failed to process all members of the pathset,
 	# then do nothing more with this pathset.
 	#
-	if ($pathset_err != 0) {
+	} elsif ($pathset_err != 0) {
 	    # The $err value has already # been set, so we just carry on
 	    # with the next pathset in this case.
 	    next;
@@ -2415,6 +2455,44 @@ sub set_timestamps()
 	}
     }
     exit($err) if ($err > 0);
+    return;
+}
+
+
+# forget_path - forget that we saw a path, remove it from all hashs
+#
+# given:
+#	$basename_noext		# basename without .extension to ignore
+#
+sub forget_path($)
+{
+    my ($basename_noext) = @_;    # get args
+    my $pathset;	# array of parts from a single %basenoext_pathset
+    my $path;		# a path in the pathset
+
+    # get the pathset to delete
+    #
+    $pathset = $basenoext_pathset{$basename_noext};
+    if (! defined $pathset) {
+	warning("undef pathset when ignoring: $basename_noext");
+	return;
+    }
+
+    # ignore each element of the pathset
+    #
+    foreach $path ( sort @{$pathset} ) {
+	if (defined $path_destdir{$path} && defined $path_destfile{$path}) {
+	    delete $destpath_path{"$path_destdir{$path}/$path_destfile{$path}"};
+	}
+	delete $path_destdir{$path};
+	delete $path_destfile{$path};
+	delete $path_basenoext{$path};
+	delete $path_roll_sub{$path};
+	delete $path_filetime{$path};
+	delete $need_plus{$path};
+    }
+    delete $basenoext_pathset{$basename_noext};
+    delete $pathset_timestamp{$basename_noext};
     return;
 }
 
