@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.3 $
-# @(#) $Id: exifrename.pl,v 4.3 2007/12/29 03:30:53 chongo Exp chongo $
+# @(#) $Revision: 4.5 $
+# @(#) $Id: exifrename.pl,v 4.5 2008/07/12 16:19:41 chongo Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.3 $, 10;
+my $VERSION = substr q$Revision: 4.5 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -194,8 +194,8 @@ my $help = qq{\n$usage
     -d		 do nothing / "dry run", do not create/alter any file (def: do)
     -v lvl	 set verbose / debug level to lvl (def: 0)
 
-    srcdir	 source directory
-    destdir	 destination directory
+    srcdir	 source directory (must exist)
+    destdir	 destination directory (must exist)
 
     NOTE: exit 0 means all is OK, exit !=0 means some fatal error
 
@@ -397,16 +397,36 @@ sub parse_args()
     $rollfile = $opt_e if defined $opt_e;
     # canonicalize srcdir removing leading ./'s, multiple //'s, trailing /'s
     $srcdir = $ARGV[0];
+    if (! -d $srcdir) {
+    	error(11, "srcdir does not exist: $srcdir");
+    }
     $srcdir = abs_path($srcdir);
     $srcdir =~ s|^(\./+)+||;
     $srcdir =~ s|//+|/|g;
     $srcdir =~ s|(.)/+$|$1|;
+    if (! -d $srcdir) {
+    	error(12, "revised srcdir does not exist: $srcdir");
+    }
+    $srcdir = abs_path($srcdir);
+    if (! -d $srcdir) {
+    	error(13, "absolute path of srcdir does not exist: $srcdir");
+    }
     # canonicalize destdir removing leading ./'s, multiple //'s, trailing /'s
     $destdir = $ARGV[1];
+    if (! -d $destdir) {
+    	error(14, "destdir does not exist: $destdir");
+    }
     $destdir = abs_path($destdir);
     $destdir =~ s|^(\./+)+||;
     $destdir =~ s|//+|/|g;
     $destdir =~ s|(.)/+$|$1|;
+    if (! -d $destdir) {
+    	error(15, "revised destdir does not exist: $destdir");
+    }
+    $destdir = abs_path($destdir);
+    if (! -d $destdir) {
+    	error(16, "absolute path of destdir does not exist: $destdir");
+    }
     $mv_fwd_chars = $opt_y if defined $opt_y;
     $mv_end_chars = $opt_z if defined $opt_z;
 
@@ -464,19 +484,19 @@ sub parse_args()
 	dbg(1, "-r readme file is sane: $opt_r");
 	($readme_dev, $readme_ino,) = stat($readme_path);
 	if (! defined $readme_dev || ! defined $readme_ino) {
-	    error(11, "stat error on $readme_path: $!");
+	    error(17, "stat error on $readme_path: $!");
 	}
 	if (!defined $readme_path) {
-	    error(12, "-r $opt_r but we have no readme_path");
+	    error(18, "-r $opt_r but we have no readme_path");
 	}
 	if (!defined $readme_path) {
-	    error(13, "-r $opt_r but we have no readme_timestamp");
+	    error(19, "-r $opt_r but we have no readme_timestamp");
 	}
 	if (!defined $readme_dev) {
-	    error(14, "-r $opt_r but we have no readme_dev");
+	    error(20, "-r $opt_r but we have no readme_dev");
 	}
 	if (!defined $readme_ino) {
-	    error(15, "-r $opt_r but we have no readme_ino");
+	    error(21, "-r $opt_r but we have no readme_ino");
 	}
     }
 
@@ -485,17 +505,17 @@ sub parse_args()
     if ($srcdir =~ /$untaint/o) {
 	$srcdir = $1;
     } else {
-	error(16, "bogus chars in srcdir");
+	error(22, "bogus chars in srcdir");
     }
     if ($destdir =~ /$untaint/o) {
 	$destdir = $1;
     } else {
-	error(17, "bogus chars in destdir");
+	error(23, "bogus chars in destdir");
     }
     if ($rollfile =~ /$untaint/o) {
 	$rollfile = $1;
     } else {
-	error(18, "bogus chars in -e filename");
+	error(24, "bogus chars in -e filename");
     }
 }
 
@@ -513,29 +533,39 @@ sub parse_args()
 #	do under just $destdir/$dir1-$dir2.
 #
 # returns:
-#	($dir1, $dir2, $dir3) == the 3 directory names for a given path,
+#	($dir0, $dir1, $dir2, $dir3) == the directory names for a given path,
 #	The destination directory will be:
 #
-#	    $destdir/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3
+#	    $destdir/$dir0/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3
 #
 # or if $dir3 is not used:
 #
-#	    $destdir/$dir1/$dir1-$dir2
+#	    $destdir/$dir0/$dir1/$dir1-$dir2
 #
 # NOTE: Does not return on error.
 #
 sub destdir_path($$$)
 {
     my ($timestamp, $roll, $roll_sub) = @_;
+    my $yyyy;		# EXIF or filename timestamp UTC year
     my $yyyymm;		# EXIF or filename timestamp UTC year and UTC month
+
+    # convert timestamp into a yyyy date in UTC
+    #
+    $yyyy = strftime("%Y", gmtime($timestamp));
+    if (defined $yyyy && $yyyy =~ /$untaint/o) {
+	$yyyy = $1;
+    } else {
+	error(30, "strange chars in yyyy for timestamp: $timestamp");
+    }
 
     # convert timestamp into a yyyymm date in UTC
     #
-    $yyyymm = strftime("%Y%m", gmtime($timestamp));
+    $yyyymm = $yyyy . strftime("%m", gmtime($timestamp));
     if (defined $yyyymm && $yyyymm =~ /$untaint/o) {
 	$yyyymm = $1;
     } else {
-	error(20, "strange chars in yyyymm for timestamp: $timestamp");
+	error(31, "strange chars in yyyymm for timestamp: $timestamp");
     }
 
     # firewall - untaint and sanity check roll number
@@ -543,12 +573,12 @@ sub destdir_path($$$)
     if ($roll =~ /$untaint_file/o) {
 	$roll = $1;
     } else {
-	error(21, "bogus chars in roll");
+	error(32, "bogus chars in roll");
     }
     if ($roll =~ /^\s*$/) {
-	error(22, "roll is empty or only has whitespace");
+	error(33, "roll is empty or only has whitespace");
     } elsif ($roll =~ /^\./) {
-	error(23, "roll start with a .");
+	error(34, "roll start with a .");
     }
 
     # firewall - untaint and sanity check roll_sub
@@ -557,20 +587,20 @@ sub destdir_path($$$)
 	if ($roll_sub =~ /$untaint_file/o) {
 	    $roll_sub = $1;
 	} else {
-	    error(24, "bogus chars in roll_sub");
+	    error(35, "bogus chars in roll_sub");
 	}
 	if ($roll_sub =~ /^\s*$/) {
-	    error(25, "roll_sub is empty or only has whitespace");
+	    error(36, "roll_sub is empty or only has whitespace");
 	} elsif ($roll_sub =~ /^\./) {
-	    error(26, "roll_sub start with a .");
+	    error(37, "roll_sub start with a .");
 	}
     } else {
 	$roll_sub = undef;
     }
 
-    # return the 3 levels
+    # return the directory levels
     #
-    return ($yyyymm, $roll, $roll_sub);
+    return ($yyyy, $yyyymm, $roll, $roll_sub);
 }
 
 
@@ -593,31 +623,32 @@ sub dir_setup()
     my ($errcode, $errmsg);	# form_dir return values
     my @need_subdir;		# directories under $destdir that are needed
     my $path;			# a srcdir path to process
-    my $dir1;			# 1st level subdir under destdir
-    my $dir2;			# 2nd level subdir under destdir
-    my $dir3;			# 3rd level subdir under destdir
+    my $dir0;			# top level yyyy name
+    my $dir1;			# 1st level yyyymm name
+    my $dir2;			# 2nd level rolnum name
+    my $dir3;			# 3rd level sub-rolnum name
     my $err;			# >0 ==> fatal error number, 0 ==> OK
 
     # firewall - check for a sane srcdir
     #
     if (! -e $srcdir) {
-	error(30, "srcdir does not exist: $srcdir");
+	error(40, "srcdir does not exist: $srcdir");
     }
     if (! -d $srcdir) {
-	error(31, "srcdir is not a directory: $srcdir");
+	error(41, "srcdir is not a directory: $srcdir");
     }
     if (! -r $srcdir) {
-	error(32, "srcdir is not readable: $srcdir");
+	error(42, "srcdir is not readable: $srcdir");
     }
     if (! -x $srcdir) {
-	error(33, "srcdir is not searchable: $srcdir");
+	error(43, "srcdir is not searchable: $srcdir");
     }
 
     # setup the destination directory if needed
     #
     ($errcode, $errmsg) = form_dir($destdir);
     if ($errcode != 0) {
-	error(34, "destdir mkdir error: $errmsg for $destdir");
+	error(44, "destdir mkdir error: $errmsg for $destdir");
     }
 
     # record the device and inode number of $destdir
@@ -630,11 +661,11 @@ sub dir_setup()
 
 	# get the 3 subdir levels
 	#
-	# NOTE: In the case of the -r readme.txt file, we the roll_sub will
+	# NOTE: In the case of the -r readme.txt file, the roll_sub will
 	#	be undef and $dir3 will be undef because that file will
 	#	do under just $destdir/$dir1-$dir2.
 	#
-	($dir1, $dir2, $dir3) = destdir_path(
+	($dir0, $dir1, $dir2, $dir3) = destdir_path(
 	    $pathset_timestamp{$path_basenoext{$path}},
 	    $rollnum,
 	    $path_roll_sub{$path});
@@ -642,15 +673,19 @@ sub dir_setup()
 	# add the 3 paths to the set of directories to check
 	#
 	if (defined $dir3) {
-	    push(@need_subdir, "$destdir/$dir1",
-			       "$destdir/$dir1/$dir1-$dir2",
-			       "$destdir/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3");
+	    push(@need_subdir,
+		    "$destdir/$dir0",
+		    "$destdir/$dir0/$dir1",
+		    "$destdir/$dir0/$dir1/$dir1-$dir2",
+		    "$destdir/$dir0/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3");
 	    $path_destdir{$path} =
-	        "$destdir/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3";
+	        "$destdir/$dir0/$dir1/$dir1-$dir2/$dir1-$dir2-$dir3";
 	} else {
-	    push(@need_subdir, "$destdir/$dir1",
-			       "$destdir/$dir1/$dir1-$dir2");
-	    $path_destdir{$path} = "$destdir/$dir1/$dir1-$dir2";
+	    push(@need_subdir,
+		    "$destdir/$dir0",
+		    "$destdir/$dir0/$dir1",
+		    "$destdir/$dir0/$dir1/$dir1-$dir2");
+	    $path_destdir{$path} = "$destdir/$dir0/$dir1/$dir1-$dir2";
 	}
 	dbg(4, "destination of $path is $path_destdir{$path}");
     }
@@ -872,7 +907,7 @@ sub wanted($)
     # ignore non-readable directories
     #
     if (! -r $file) {
-	error(40 * ($opt_a?-1:1), "skipping non-readable directory: $pathname");
+	error(50 * ($opt_a?-1:1), "skipping non-readable directory: $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -880,7 +915,7 @@ sub wanted($)
     # open this directory for filename collection
     #
     if (! opendir DIR,$file) {
-	error(41 * ($opt_a?-1:1), "opendir failed on: $pathname: $!");
+	error(51 * ($opt_a?-1:1), "opendir failed on: $pathname: $!");
 	$File::Find::prune = 1;
 	return;
     }
@@ -929,7 +964,7 @@ sub wanted($)
 	 undef, $mtime, $ctime) = stat($path);
 	if (! defined $dev || ! defined $ino ||
 	    ! defined $mtime || ! defined $ctime) {
-	    error(42 * ($opt_a?-1:1), "stat failed for: $path $!");
+	    error(52 * ($opt_a?-1:1), "stat failed for: $path $!");
 	    $File::Find::prune = 1;
 	    return;
 	}
@@ -1120,11 +1155,12 @@ sub wanted($)
 #
 # Then we will create the file:
 #
-#    /destdir/200505/200505-043/200505-043-101/12152545-5627-200505-043-101-pg5v.cr2
+#    /destdir/2005/200505/200505-043/200505-043-101/12152545-5627-200505-043-101-pg5v.cr2
 #
 # The created file path is:
 #
 #	/destdir			# destdir path of image library
+#	/2005				# image year
 #	/200505				# image year & month
 #	/200505-043			# year & month, -, roll
 #	/200505-043-010			# year & month, -, roll, -, roll-subdir
@@ -1311,8 +1347,8 @@ sub set_destname()
 	#
 	$timestamp = $pathset_timestamp{$basename_noext};
 	if (! defined $timestamp) {
-	    error(-50, "undef 2nd get of timestamp for $basename_noext");
-	    $err = 50;	# delay exit(50);
+	    error(-60, "undef 2nd get of timestamp for $basename_noext");
+	    $err = 60;	# delay exit(50);
 	    last;
 	}
 	$yyyymm = strftime("%Y%m", gmtime($timestamp));
@@ -1322,8 +1358,8 @@ sub set_destname()
 	$roll_sub = "" if ! defined $roll_sub;
 	if (! defined $yyyymm || ! defined $ddhhmmss ||
 	    ! defined $multifound) {
-	    error(-51, "undef of some intermediate var for @{$pathset}[0]");
-	    $err = 51;	# delay exit(51);
+	    error(-61, "undef of some intermediate var for @{$pathset}[0]");
+	    $err = 61;	# delay exit(51);
 	    last;
 	}
 
@@ -1381,7 +1417,7 @@ sub set_destname()
 		#	12152645+5628_01-200505-043-101-pg5v.cr2
 		#
 		# convert it to just pg5v5627.cr2 and pg5v5628.cr2 so we can
-		# reprocess the destination tree if we want to later on.
+		# reprocess the destination tree if we want later on.
 		#
 		} elsif ($lc_srcbase =~
 			m{
@@ -1401,7 +1437,38 @@ sub set_destname()
 			  (\..*)?$	# $5: optional .extension
 			 }ix) {
 		    dbg(2, "found new style filename: $lc_srcbase");
-		    $lc_srcbase = $3 . $1 . substr($4, 1) . $5;
+		    if (defined $1) {
+			dbg(6, "1: sequence number match: $1");
+		    } else {
+			dbg(6, "1: sequence number match is undefined");
+		    }
+		    if (defined $2) {
+			dbg(6, "2: optional de-duplicate digits: $2");
+		    } else {
+			dbg(6, "2: optional de-duplicate digits is undefined");
+		    }
+		    if (defined $3) {
+			dbg(6, "3: image filename chars pre .ext: $3");
+		    } else {
+			dbg(6, "3: image filename chars pre .ext is undefined");
+		    }
+		    if (defined $4) {
+			dbg(6, "4: optional imagename chars: $4");
+		    } else {
+			dbg(6, "4: optional imagename chars is undefined");
+		    }
+		    if (defined $5) {
+			dbg(6, "5: optional .extension: $5");
+		    } else {
+			dbg(6, "5: optional .extension is undefined");
+		    }
+		    $lc_srcbase = $3 . $1;
+		    if (defined $4) {
+			$lc_srcbase .= substr($4, 1);
+		    }
+		    if (defined $5) {
+			$lc_srcbase .= $5;
+		    }
 		    if ($lc_srcbase =~ /-/) {
 			$lc_srcbase = s/-/~/g;
 			dbg(4, "conv -'s to ~'s in new srcbase");
@@ -1456,8 +1523,8 @@ sub set_destname()
 		# firewall - must already have path_destdir
 		#
 		if (! defined $path_destdir{$path}) {
-		    error(-52, "missing destdir path for: $path");
-		    $err = 52;	# delay exit(52)
+		    error(-62, "missing destdir path for: $path");
+		    $err = 62;	# delay exit(52)
 		    $pathset_err = $err;
 		    last;
 		}
@@ -1553,8 +1620,8 @@ sub set_destname()
 		#
 		$lc_srcbase = $path_lc_srcbase{$path};
 		if (! defined $lc_srcbase) {
-		    error(-53, "undef lc_srcbase cache value for $path");
-		    $err = 53;	# delay exit(53);
+		    error(-63, "undef lc_srcbase cache value for $path");
+		    $err = 63;	# delay exit(53);
 		    last;
 		}
 
@@ -1570,8 +1637,8 @@ sub set_destname()
 		#
 		$timestamp = $pathset_timestamp{$path_basenoext{$path}};
 		if (! defined $timestamp) {
-		    error(-54, "undef 2nd get of timestamp for $path");
-		    $err = 54;	# delay exit(54);
+		    error(-64, "undef 2nd get of timestamp for $path");
+		    $err = 64;	# delay exit(54);
 		    last;
 		}
 		$yyyymm = strftime("%Y%m", gmtime($timestamp));
@@ -1581,8 +1648,8 @@ sub set_destname()
 		$roll_sub = "" if ! defined $roll_sub;
 		if (! defined $yyyymm || ! defined $ddhhmmss ||
 		    ! defined $multifound) {
-		    error(-55, "undef of some intermediate var for $path");
-		    $err = 55;	# delay exit(55);
+		    error(-65, "undef of some intermediate var for $path");
+		    $err = 65;	# delay exit(55);
 		    last;
 		}
 
