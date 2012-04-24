@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.7 $
-# @(#) $Id: exifrename.pl,v 4.7 2012/04/24 06:48:11 root Exp root $
+# @(#) $Revision: 4.8 $
+# @(#) $Id: exifrename.pl,v 4.8 2012/04/24 06:57:06 root Exp $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.7 $, 10;
+my $VERSION = substr q$Revision: 4.8 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -753,6 +753,7 @@ sub dir_setup()
 #	/.Trashes/		# directory where deleted images go?
 #	/.Trashes/501/		# ??? directory (other 5xx dirs have been seen)
 #	/.Trashes/._501		# ??? file (other (._5xx files have beens seen)
+#	/MISC			# Canon non-image CF folder
 #
 # Once the camera deletes an image, this file is created:
 #
@@ -779,7 +780,7 @@ sub dir_setup()
 #	*.Trashes		# a file that ends in .Trashes
 #	.Spotlight-*		# Spotlight index files
 #	.((anything))		# files and dirs that start with .
-#	/DCIM/EOSMISC/		# Canon Miscellaneous .CTG extension files
+#	/DCIM/EOSMISC		# Canon Miscellaneous .CTG extension files
 #	*.CTG			# helps storage / maint. of files on CF card
 #
 # In addition, for path purposes, we do not create DCIM as a path component
@@ -845,8 +846,8 @@ sub wanted($)
 
     # prune out certain top level paths
     #
-    # As noted in detail above, we will prune off any .Trashes,
-    # .comstate.tof qne DCIM/EOSMISC dirs that are directly under $srcdir
+    # As noted in detail above, we will prune off any .Trashes, MISC,
+    # .comstate.tof and DCIM/EOSMISC dirs that are directly under $srcdir
     #
     if ($pathname eq "$srcdir/.Trashes") {
 	# skip this useless camera node
@@ -866,12 +867,18 @@ sub wanted($)
 	$File::Find::prune = 1;
 	return;
     }
+    if ($pathname eq "$srcdir/MISC") {
+	# skip Canon misc. non-photo directory
+	dbg(4, "MISC prune #6 $pathname");
+	$File::Find::prune = 1;
+	return;
+    }
 
     # prune out .DS_Store files
     #
     if ($file eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	dbg(4, ".DS_Store prune #6 $pathname");
+	dbg(4, ".DS_Store prune #7 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -880,7 +887,7 @@ sub wanted($)
     #
     if ($file =~ /.Trashes$/) {
 	# skip OS X .DS_Store files
-	dbg(4, "*.Trashes prune #7 $pathname");
+	dbg(4, "*.Trashes prune #8 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -889,7 +896,7 @@ sub wanted($)
     #
     if ($file =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	dbg(4, "desktop prune #8 $pathname");
+	dbg(4, "desktop prune #9 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -898,7 +905,7 @@ sub wanted($)
     #
     if ($file =~ /^\.Spotlight-/i) {
 	# skip Spotlight index directories
-	dbg(4, "Spotlight prune #9 $pathname");
+	dbg(4, "Spotlight prune #10 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -907,7 +914,7 @@ sub wanted($)
     #
     if ($file =~ /^\../) {
 	# skip . files and dirs
-	dbg(4, "dot-file/dir prune #10 $pathname");
+	dbg(4, "dot-file/dir prune #11 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
