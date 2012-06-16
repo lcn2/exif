@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.8 $
-# @(#) $Id: exifrename.pl,v 4.8 2012/04/24 06:57:06 root Exp $
+# @(#) $Revision: 4.9 $
+# @(#) $Id: exifrename.pl,v 4.9 2012/04/24 07:25:15 root Exp chongo $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.8 $, 10;
+my $VERSION = substr q$Revision: 4.9 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -915,6 +915,15 @@ sub wanted($)
     if ($file =~ /^\../) {
 	# skip . files and dirs
 	dbg(4, "dot-file/dir prune #11 $pathname");
+	$File::Find::prune = 1;
+	return;
+    }
+
+    # prune out .csd camera setting files
+    #
+    if ($file =~ /\.csd$/) {
+	# skip .csd files and dirs
+	dbg(4, "camera setting file (.csd) prune #12 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
