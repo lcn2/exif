@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.9 $
-# @(#) $Id: exifrename.pl,v 4.9 2012/04/24 07:25:15 root Exp chongo $
+# @(#) $Revision: 4.10 $
+# @(#) $Id: exifrename.pl,v 4.10 2012/06/16 06:33:56 chongo Exp root $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.9 $, 10;
+my $VERSION = substr q$Revision: 4.10 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -753,6 +753,8 @@ sub dir_setup()
 #	/.Trashes/		# directory where deleted images go?
 #	/.Trashes/501/		# ??? directory (other 5xx dirs have been seen)
 #	/.Trashes/._501		# ??? file (other (._5xx files have beens seen)
+#	/DCIM/EOSMISC		# Canon image catalog information
+#	/DCIM/MISC		# Canon non-image CF folder
 #	/MISC			# Canon non-image CF folder
 #
 # Once the camera deletes an image, this file is created:
@@ -782,6 +784,7 @@ sub dir_setup()
 #	.((anything))		# files and dirs that start with .
 #	/DCIM/EOSMISC		# Canon Miscellaneous .CTG extension files
 #	*.CTG			# helps storage / maint. of files on CF card
+#	*.CSD			# Canon EOS camera configurlation save file
 #
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and links in destdir.
@@ -867,9 +870,15 @@ sub wanted($)
 	$File::Find::prune = 1;
 	return;
     }
+    if ($pathname eq "$srcdir/DCIM/MISC") {
+	# skip Canon misc. non-photo directory
+	dbg(4, "DCIM/MISC prune #6 $pathname");
+	$File::Find::prune = 1;
+	return;
+    }
     if ($pathname eq "$srcdir/MISC") {
 	# skip Canon misc. non-photo directory
-	dbg(4, "MISC prune #6 $pathname");
+	dbg(4, "MISC prune #7 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -878,16 +887,16 @@ sub wanted($)
     #
     if ($file eq ".DS_Store") {
 	# skip OS X .DS_Store files
-	dbg(4, ".DS_Store prune #7 $pathname");
+	dbg(4, ".DS_Store prune #8 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
 
     # prune out files that end in .Trashes
     #
-    if ($file =~ /.Trashes$/) {
+    if ($file =~ /.Trashes$/i) {
 	# skip OS X .DS_Store files
-	dbg(4, "*.Trashes prune #8 $pathname");
+	dbg(4, "*.Trashes prune #9 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -896,7 +905,7 @@ sub wanted($)
     #
     if ($file =~ /^desktop d[bf]$/i) {
 	# skip Titanium Toast files
-	dbg(4, "desktop prune #9 $pathname");
+	dbg(4, "desktop prune #10 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -905,7 +914,7 @@ sub wanted($)
     #
     if ($file =~ /^\.Spotlight-/i) {
 	# skip Spotlight index directories
-	dbg(4, "Spotlight prune #10 $pathname");
+	dbg(4, "Spotlight prune #11 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -914,16 +923,16 @@ sub wanted($)
     #
     if ($file =~ /^\../) {
 	# skip . files and dirs
-	dbg(4, "dot-file/dir prune #11 $pathname");
+	dbg(4, "dot-file/dir prune #12 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
 
     # prune out .csd camera setting files
     #
-    if ($file =~ /\.csd$/) {
+    if ($file =~ /\.CSD$/i) {
 	# skip .csd files and dirs
-	dbg(4, "camera setting file (.csd) prune #12 $pathname");
+	dbg(4, "camera setting file (.CSD) prune #13 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -1022,7 +1031,7 @@ sub wanted($)
 	if ($basenoext eq "readme" && defined $opt_r) {
 	    warning("-r was given found file with a basename of readme " .
 		 "(w/o .extension)");
-	    dbg(1, "duplicate prune #18 $path readme basename w/o " .
+	    dbg(1, "duplicate prune #14 $path readme basename w/o " .
 		   ".extension: $path");
 	    next;
 	}
