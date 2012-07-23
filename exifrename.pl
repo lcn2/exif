@@ -2,8 +2,8 @@
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.10 $
-# @(#) $Id: exifrename.pl,v 4.10 2012/06/16 06:33:56 chongo Exp root $
+# @(#) $Revision: 4.11 $
+# @(#) $Id: exifrename.pl,v 4.11 2012/07/23 13:20:43 root Exp root $
 # @(#) $Source: /usr/local/src/cmd/exif/RCS/exifrename.pl,v $
 #
 # Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
@@ -49,7 +49,7 @@ use Cwd qw(abs_path);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 4.10 $, 10;
+my $VERSION = substr q$Revision: 4.11 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars
@@ -783,8 +783,8 @@ sub dir_setup()
 #	.Spotlight-*		# Spotlight index files
 #	.((anything))		# files and dirs that start with .
 #	/DCIM/EOSMISC		# Canon Miscellaneous .CTG extension files
-#	*.CTG			# helps storage / maint. of files on CF card
 #	*.CSD			# Canon EOS camera configurlation save file
+#	*.CTG			# helps storage / maint. of files on CF card
 #
 # In addition, for path purposes, we do not create DCIM as a path component
 # when forming files and links in destdir.
@@ -923,16 +923,25 @@ sub wanted($)
     #
     if ($file =~ /^\../) {
 	# skip . files and dirs
-	dbg(4, "dot-file/dir prune #12 $pathname");
+	dbg(4, "dot-file prune #12 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
 
     # prune out .csd camera setting files
     #
-    if ($file =~ /\.CSD$/i) {
+    if ($file =~ /\.csd$/i) {
 	# skip .csd files and dirs
 	dbg(4, "camera setting file (.CSD) prune #13 $pathname");
+	$File::Find::prune = 1;
+	return;
+    }
+
+    # prune out storage / maint. of CF card files
+    #
+    if ($file =~ /\.ctg$/i) {
+	# skip .csd files and dirs
+	dbg(4, "camera storage maint. file (.CTG) prune #14 $pathname");
 	$File::Find::prune = 1;
 	return;
     }
@@ -965,10 +974,11 @@ sub wanted($)
 	#	*.Trashes
 	#	.*
 	#	*.ctg
+	#	*.csd
 	#
 	if ($entry =~ /\.tof$/i || $entry =~ /^desktop/i ||
 	    $entry =~ /\.Trashes$/i || $entry =~ /^\./ ||
-	    $entry =~ /\.ctg$/i) {
+	    $entry =~ /\.ctg$/i || $entry =~ /\.csd$/i) {
 	    dbg(6, "under $pathname ignoring name of: $entry");
 	    next;
 	}
@@ -1031,7 +1041,7 @@ sub wanted($)
 	if ($basenoext eq "readme" && defined $opt_r) {
 	    warning("-r was given found file with a basename of readme " .
 		 "(w/o .extension)");
-	    dbg(1, "duplicate prune #14 $path readme basename w/o " .
+	    dbg(1, "duplicate prune #15 $path readme basename w/o " .
 		   ".extension: $path");
 	    next;
 	}
