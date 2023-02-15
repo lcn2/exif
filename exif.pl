@@ -2,9 +2,9 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.7 $
-# @(#) $Id: exif.pl,v 1.7 2005/05/04 15:11:48 chongo Exp chongo $
-# @(#) $Source: /usr/local/src/cmd/exif/RCS/exif.pl,v $
+# @(#) $Revision: 1.8 $
+# @(#) $Id: exif.pl,v 1.8 2005/05/04 16:15:23 chongo Exp $
+# @(#) $Source: /usr/local/src/bin/exif/RCS/exif.pl,v $
 #
 # Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
 #
@@ -41,7 +41,7 @@ use Image::ExifTool qw(ImageInfo);
 
 # version - RCS style *and* usable by MakeMaker
 #
-my $VERSION = substr q$Revision: 1.7 $, 10;
+my $VERSION = substr q$Revision: 1.8 $, 10;
 $VERSION =~ s/\s+$//;
 
 # my vars

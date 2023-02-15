@@ -2,9 +2,9 @@
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.2 $
-# @(#) $Id: Makefile,v 1.2 2005/07/13 04:23:00 chongo Exp root $
-# @(#) $Source: /usr/local/src/cmd/exif/RCS/Makefile,v $
+# @(#) $Revision: 1.3 $
+# @(#) $Id: Makefile,v 1.3 2013/03/03 19:40:27 root Exp $
+# @(#) $Source: /usr/local/src/bin/exif/RCS/Makefile,v $
 #
 # Copyright (c) 2001 by Landon Curt Noll.  All Rights Reserved.
 #

@@ -1,0 +1,29 @@
+$ ls -lRai /Volumes/EOS_DIGITAL
+total 12
+     2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 .
+  8766 drwxrwxrwt  6 root    admin   204  5 May 14:01 ..
+788327 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 .Trashes
+     3 drwxrwxrwx  1 chongo  admin  4096  5 May 21:00 DCIM
+
+/Volumes/EOS_DIGITAL/.Trashes:
+total 16
+788327 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 .
+     2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 ..
+653097 -rwxrwxrwx  1 chongo  admin    82  5 May 14:01 ._501
+146420 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 501
+
+/Volumes/EOS_DIGITAL/.Trashes/501:
+total 8
+146420 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 .
+788327 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 ..
+
+/Volumes/EOS_DIGITAL/DCIM:
+total 12
+3 drwxrwxrwx  1 chongo  admin  4096  5 May 21:00 .
+2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:01 ..
+4 drwxrwxrwx  1 chongo  admin  4096  5 May 21:00 100EOS1D
+
+/Volumes/EOS_DIGITAL/DCIM/100EOS1D:
+total 8
+4 drwxrwxrwx  1 chongo  admin  4096  5 May 21:00 .
+3 drwxrwxrwx  1 chongo  admin  4096  5 May 21:00 ..

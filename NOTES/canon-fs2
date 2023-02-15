@@ -1,0 +1,87 @@
+$ ls -lRai /Volumes/EOS_DIGITAL\ 1
+total 80
+    1 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:01 .
+ 8766 drwxrwxrwt  7 root    admin    238  5 May 14:18 ..
+60447 -rwxrwxrwx  1 chongo  admin   6148  5 May 13:58 .DS_Store
+42082 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:01 .Trashes
+    2 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:01 DCIM
+    4 -rwxrwxrwx  1 chongo  admin     72  1 May 01:31 comstate.tof
+
+/Volumes/EOS_DIGITAL 1/.Trashes:
+total 96
+42082 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:01 .
+    1 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:01 ..
+48325 -rwxrwxrwx  1 chongo  admin     82 30 Apr 14:59 ._501
+42627 -rwxrwxrwx  1 chongo  admin     82 30 Apr 23:01 ._502
+49515 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:32 501
+17300 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:01 502
+
+/Volumes/EOS_DIGITAL 1/.Trashes/501:
+total 7888
+49515 drwxrwxrwx  1 chongo  admin    16384 30 Apr 15:32 .
+42082 drwxrwxrwx  1 chongo  admin    16384 30 Apr 23:01 ..
+    5 -rwxrwxrwx  1 chongo  admin  8033224 30 Apr 22:31 LS1F5842.CR2
+
+/Volumes/EOS_DIGITAL 1/.Trashes/502:
+total 32
+17300 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:01 .
+42082 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:01 ..
+
+/Volumes/EOS_DIGITAL 1/DCIM:
+total 64
+    2 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:01 .
+    1 drwxrwxrwx  1 chongo  admin  16384 30 Apr 15:01 ..
+47219 -rwxrwxrwx  1 chongo  admin   6148 30 Apr 23:02 .DS_Store
+    3 drwxrwxrwx  1 chongo  admin  16384 30 Apr 23:18 100EOS1D
+
+/Volumes/EOS_DIGITAL 1/DCIM/100EOS1D:
+total 51696
+    3 drwxrwxrwx  1 chongo  admin    16384 30 Apr 23:18 .
+    2 drwxrwxrwx  1 chongo  admin    16384 30 Apr 15:01 ..
+17112 -rwxrwxrwx  1 chongo  admin     6148 30 Apr 23:02 .DS_Store
+ 9948 -rwxrwxrwx  1 chongo  admin    20164 29 Apr 15:15 LS1F4304.WAV
+29233 -rwxrwxrwx  1 chongo  admin    19834 29 Apr 15:15 LS1F4322.WAV
+54552 -rwxrwxrwx  1 chongo  admin  8084753 30 Apr 23:17 LS1F5843.cr2
+36603 -rwxrwxrwx  1 chongo  admin  8141829 30 Apr 23:17 LS1F5845.cr2
+16242 -rwxrwxrwx  1 chongo  admin  8318679 30 Apr 23:17 LS1F5849.cr2
+35484 -rwxrwxrwx  1 chongo  admin  9333741 30 Apr 23:17 LS1F5850.cr2
+  910 -rwxrwxrwx  1 chongo  admin  9474561 30 Apr 23:17 LS1F5851.cr2
+45014 -rwxrwxrwx  1 chongo  admin  9421622 30 Apr 23:18 LS1F5852.cr2
+: ne; ls -lRai /Volumes/EOS_DIGITAL
+total 12
+     2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 .
+  8766 drwxrwxrwt  7 root    admin   238  5 May 14:18 ..
+681238 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 .Trashes
+     3 drwxrwxrwx  1 chongo  admin  4096  5 May 21:17 DCIM
+
+/Volumes/EOS_DIGITAL/.Trashes:
+total 16
+681238 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 .
+     2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 ..
+899691 -rwxrwxrwx  1 chongo  admin    82  5 May 14:18 ._501
+605677 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 501
+
+/Volumes/EOS_DIGITAL/.Trashes/501:
+total 8
+605677 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 .
+681238 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 ..
+
+/Volumes/EOS_DIGITAL/DCIM:
+total 16
+   3 drwxrwxrwx  1 chongo  admin  4096  5 May 21:17 .
+   2 drwxrwxrwx  1 chongo  admin  4096  5 May 14:18 ..
+   4 drwxrwxrwx  1 chongo  admin  4096  5 May 21:17 100EOS1D
+3930 drwxrwxrwx  1 chongo  admin  4096  5 May 21:17 101EOS1D
+
+/Volumes/EOS_DIGITAL/DCIM/100EOS1D:
+total 15708
+   4 drwxrwxrwx  1 chongo  admin     4096  5 May 21:17 .
+   3 drwxrwxrwx  1 chongo  admin     4096  5 May 21:17 ..
+   5 -rwxrwxrwx  1 chongo  admin  7999727  5 May 21:17 LS1F5885.CR2
+1959 -rwxrwxrwx  1 chongo  admin  8071547  5 May 21:17 LS1F5886.CR2
+
+/Volumes/EOS_DIGITAL/DCIM/101EOS1D:
+total 7576
+3930 drwxrwxrwx  1 chongo  admin     4096  5 May 21:17 .
+   3 drwxrwxrwx  1 chongo  admin     4096  5 May 21:17 ..
+3931 -rwxrwxrwx  1 chongo  admin  7747378  5 May 21:17 LS1F5887.CR2

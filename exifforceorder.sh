@@ -14,9 +14,9 @@
 # add 1 to the second.  This is because a time such as "0:46:60" is
 # converted into "0:47:00" and "0:46:61" into "0:47:01".
 #
-# @(#) $Revision$
-# @(#) $Id$
-# @(#) $Source$
+# @(#) $Revision: 1.1 $
+# @(#) $Id: exifforceorder.sh,v 1.1 2013/03/03 19:39:33 root Exp $
+# @(#) $Source: /usr/local/src/bin/exif/RCS/exifforceorder.sh,v $
 #
 # Copyright (c) 2013 by Landon Curt Noll.  All Rights Reserved.
 #
