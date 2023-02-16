@@ -1,12 +1,8 @@
-#!/usr/bin/perl -wT
+#!/usr/bin/env perl -w
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.8 $
-# @(#) $Id: exif.pl,v 1.8 2005/05/04 16:15:23 chongo Exp $
-# @(#) $Source: /usr/local/src/bin/exif/RCS/exif.pl,v $
-#
-# Copyright (c) 2005 by Landon Curt Noll.  All Rights Reserved.
+# Copyright (c) 2005,2023 by Landon Curt Noll.  All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,

@@ -1,12 +1,8 @@
-#!/usr/bin/perl -wT
+#!/usr/bin/env perl -w
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# @(#) $Revision: 4.12 $
-# @(#) $Id: exifrename.pl,v 4.12 2012/07/23 13:54:13 root Exp $
-# @(#) $Source: /usr/local/src/bin/exif/RCS/exifrename.pl,v $
-#
-# Copyright (c) 2005-2006 by Landon Curt Noll.	All Rights Reserved.
+# Copyright (c) 2005-2006,2023 by Landon Curt Noll.	All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
