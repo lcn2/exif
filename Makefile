@@ -1,12 +1,8 @@
-#!/usr/bin/make
+#!/usr/bin/end make
 #
 # exif - print EXIF information that may be in a file
 #
-# @(#) $Revision: 1.3 $
-# @(#) $Id: Makefile,v 1.3 2013/03/03 19:40:27 root Exp $
-# @(#) $Source: /usr/local/src/bin/exif/RCS/Makefile,v $
-#
-# Copyright (c) 2001 by Landon Curt Noll.  All Rights Reserved.
+# Copyright (c) 2001,2023 by Landon Curt Noll.  All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
@@ -30,30 +26,33 @@
 #
 # Share and enjoy!
 
-SHELL=/bin/sh
+SHELL= bash
 INSTALL= install
-BINMODE=0555
+BINMODE= 0555
+RM= rm
+CP= cp
+CHMOD= chmod
 
-DESTBIN=/usr/local/bin
+DESTBIN= /usr/local/bin
 
 TARGETS= exif exifrename exifforceorder
 
 all: ${TARGETS}
 
 exif: exif.pl
-	-rm -f $@
-	cp $@.pl $@
-	chmod +x $@
+	${RM} -f $@
+	${CP} $@.pl $@
+	${CHMOD} +x $@
 
 exifrename: exifrename.pl
-	-rm -f $@
-	cp $@.pl $@
-	chmod +x $@
+	${RM} -f $@
+	${CP} $@.pl $@
+	${CHMOD} +x $@
 
 exifforceorder: exifforceorder.sh
-	-rm -f $@
-	cp $@.sh $@
-	chmod +x $@
+	${RM} -f $@
+	${CP} $@.sh $@
+	${CHMOD} +x $@
 
 install: all
 	${INSTALL} -c -m ${BINMODE} ${TARGETS} ${DESTBIN}
@@ -61,4 +60,4 @@ install: all
 clean:
 
 clobber: clean
-	-rm -f ${TARGETS}
+	${RM} -f ${TARGETS}
