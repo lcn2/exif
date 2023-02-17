@@ -1,4 +1,4 @@
-#!/usr/bin/end make
+#!/usr/bin/env make
 #
 # exif - print EXIF information that may be in a file
 #
