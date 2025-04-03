@@ -1,8 +1,8 @@
-#!/bin/bash -
+#!/usr/bin/env bash
 #
 # exifforceorder - force DateTimeOriginal order in a directory for iPad
 #
-# The iPod dislays images in a directory by order of the DateTimeOriginal
+# The iPod displays images in a directory by order of the DateTimeOriginal
 # value.  This tool will change the DateTimeOriginal values so that they
 # will match the file order of images in a given directory.
 #
@@ -14,11 +14,7 @@
 # add 1 to the second.  This is because a time such as "0:46:60" is
 # converted into "0:47:00" and "0:46:61" into "0:47:01".
 #
-# @(#) $Revision: 1.1 $
-# @(#) $Id: exifforceorder.sh,v 1.1 2013/03/03 19:39:33 root Exp $
-# @(#) $Source: /usr/local/src/bin/exif/RCS/exifforceorder.sh,v $
-#
-# Copyright (c) 2013 by Landon Curt Noll.  All Rights Reserved.
+# Copyright (c) 2005-2009,2012-2013,2023,2025 by Landon Curt Noll.  All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
@@ -38,52 +34,159 @@
 # OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 # PERFORMANCE OF THIS SOFTWARE.
 #
-# chongo (Landon Curt Noll, http://www.isthe.com/chongo/index.html) /\oo/\
+# chongo (Landon Curt Noll) /\oo/\
 #
-# Share and enjoy! :-)
-
-# parse args
+# http://www.isthe.com/chongo/index.html
+# https://github.com/lcn2
 #
-USAGE="usage: $0 [-n] [-v] dir
+# Share and enjoy!  :-)
 
-    -n	    do nothing (def: do)
-    -v	    verbose output (def: not verbose)"
-N_FLAG=
-V_FLAG=
-args=$(getopt nv $*)
-if [ $? != 0 ]; then
-    echo "$0: unknown or invalid -flag" 1>&2
-    echo $USAGE 1>&2
-    exit 1
-fi
-set -- $args
-for i in $*; do
-    case "$i" in
-    -o) O_FLAG="$2"; ;;
-    -d) D_FLAG="true"; ;;
-    -f) F_FLAG="true" ;;
-    -n) N_FLAG="true" ;;
-    -v) V_FLAG="true" ;;
-    --) shift; break ;;
-    esac
-    shift
+
+# setup
+#
+export VERSION="4.12.1 2025-04-03"
+NAME=$(basename "$0")
+export NAME
+#
+export V_FLAG=
+#
+export NOOP=
+export DO_NOT_PROCESS=
+
+# usage
+#
+export USAGE="usage: $0 [-h] [-v level] [-V] [-n] [-N] [-o arg] [-d] [-f] dir
+
+    -h          print help message and exit
+    -v level    set verbosity level (def level: $V_FLAG)
+    -V          print version string and exit
+
+    -n          go thru the actions, but do not update any files (def: do the action)
+    -N          do not process anything, just parse arguments (def: process something)
+
+    -o arg      obsolete - ignored
+    -d          obsolete - ignored
+    -f          obsolete - ignored
+
+    dir         directory containing images
+
+Exit codes:
+     0         all OK
+     1         some internal tool exited non-zero
+     2         -h and help string printed or -V and version string printed
+     3         command line error
+     4	       dir is not a direcotry
+ >= 10         internal error
+
+$NAME version: $VERSION"
+
+
+# parse command line
+#
+while getopts :hv:VnNo:df flag; do
+  case "$flag" in
+    h) echo "$USAGE"
+        exit 2
+        ;;
+    v) V_FLAG="$OPTARG"
+        ;;
+    V) echo "$VERSION"
+        exit 2
+        ;;
+    n) NOOP="-n"
+        ;;
+    N) DO_NOT_PROCESS="-N"
+        ;;
+    o) ;;
+    d) ;;
+    f) ;;
+    \?) echo "$0: ERROR: invalid option: -$OPTARG" 1>&2
+        echo 1>&2
+        echo "$USAGE" 1>&2
+        exit 3
+        ;;
+    :) echo "$0: ERROR: option -$OPTARG requires an argument" 1>&2
+        echo 1>&2
+        echo "$USAGE" 1>&2
+        exit 3
+        ;;
+    *) echo "$0: ERROR: unexpected value from getopts: $flag" 1>&2
+        echo 1>&2
+        echo "$USAGE" 1>&2
+        exit 3
+        ;;
+  esac
 done
-if [ $# -lt 1 ]; then
-    echo "$0: must have at least one arg" 1>&2
-    echo $USAGE 1>&2
-    exit 2
+if [[ $V_FLAG -ge 1 ]]; then
+    echo "$0: debug[1]: debug level: $V_FLAG" 1>&2
 fi
-IMG_DIR="$@"
-if [[ ! -d "$IMG_DIR" ]]; then
-    echo "$0: ERROR: not a directory: $IMG_DIR" 1>&2
+#
+# remove the options
+#
+shift $(( OPTIND - 1 ));
+#
+# verify arg count
+#
+if [[ $# -lt 1 ]]; then
+    echo "$0: ERROR: expected at least 1 arg, found: $#" 1>&2
+    echo "$USAGE" 1>&2
     exit 3
 fi
+export IMG_DIR="$1"
+
+
+# firewall - must be a directory
+#
+if [[ ! -d "$IMG_DIR" ]]; then
+    echo "$0: ERROR: not a directory: $IMG_DIR" 1>&2
+    exit 4
+fi
+
+
+# print running info if verbose
+#
+# If -v 3 or higher, print exported variables in order that they were exported.
+#
+if [[ $V_FLAG -ge 3 ]]; then
+    echo "$0: debug[3]: VERSION=$VERSION" 1>&2
+    echo "$0: debug[3]: NAME=$NAME" 1>&2
+    echo "$0: debug[3]: V_FLAG=$V_FLAG" 1>&2
+    echo "$0: debug[3]: NOOP=$NOOP" 1>&2
+    echo "$0: debug[3]: DO_NOT_PROCESS=$DO_NOT_PROCESS" 1>&2
+    echo "$0: debug[3]: IMG_DIR=$IMG_DIR" 1>&2
+fi
+
+
+# -N stops early before any processing is performed
+#
+if [[ -n $DO_NOT_PROCESS ]]; then
+    if [[ $V_FLAG -ge 3 ]]; then
+        echo "$0: debug[3]: arguments parsed, -N given, exiting 0" 1>&2
+    fi
+    exit 0
+fi
+
+
+# cd to IMG_DIR
+#
+export CD_FAILED
+if [[ $V_FLAG -ge 5 ]]; then
+    echo "$0: debug[5]: about to: cd $IMG_DIR" 1>&2
+fi
+cd "$IMG_DIR" || CD_FAILED="true"
+if [[ -n $CD_FAILED ]]; then
+    echo "$0: ERROR: cd $IMG_DIR failed" 1>&2
+    exit 6
+fi
+if [[ $V_FLAG -ge 3 ]]; then
+    echo "$0: debug[3]: now in directory: $(/bin/pwd)" 1>&2
+fi
+
 
 # process each image
 #
 #	cr2 raw tif tiff jpg jpeg png gif psd eps
 #
-cd "$IMG_DIR"
 PREV_DateTimeOriginal=
 PREV_TIMESTAMP=
 export PREV_DateTimeOriginal PREV_TIMESTAMP
@@ -102,20 +205,19 @@ find . \( -iname '*.cr2' -o \
 	  -iname '*.gif' -o \
 	  -iname '*.psd' -o \
 	  -iname '*.eps' \) -mindepth 1 -maxdepth 1 \
-	  -print | while read file; do
+	  -print | while read -r file; do
 
     # if this is our first file, just note its DateTimeOriginal
     #
     if [[ -z "$PREV_DateTimeOriginal" ]]; then
-	PREV_DateTimeOriginal=$(exif -t DateTimeOriginal "$file")
-	PREV_TIMESTAMP=$(echo "$PREV_DateTimeOriginal" | sed -e 's/[ :-]//g')
+	PREV_TIMESTAMP="{$PREV_DateTimeOriginal//[ :-]/}"
 	if [[ -n "$V_FLAG" ]]; then
 	    echo "1st file: $file DateTimeOriginal: $PREV_DateTimeOriginal timestamp: $PREV_TIMESTAMP" 1>&2
 	fi
 	continue
     else
 	DateTimeOriginal=$(exif -t DateTimeOriginal "$file")
-	TIMESTAMP=$(echo "$DateTimeOriginal" | sed -e 's/[ :-]//g')
+	TIMESTAMP="{$DateTimeOriginal//[ :-]/}"
 	if [[ -n "$V_FLAG" ]]; then
 	    echo "nxt file: $file DateTimeOriginal: $DateTimeOriginal timestamp: $TIMESTAMP" 1>&2
 	fi
@@ -143,6 +245,11 @@ find . \( -iname '*.cr2' -o \
     # form a DateTimeOriginal that is one second later
     #
     ((NEXT_TIMESTAMP=PREV_TIMESTAMP+1))
+    # We will keep the sed expression rather than use complex bash substutuion
+    #
+    # SC2001 (style): See if you can use ${variable//search/replace} instead.
+    # https://www.shellcheck.net/wiki/SC2001
+    # shellcheck disable=SC2001
     NEXT_DateTimeOriginal=$(echo "$NEXT_TIMESTAMP" | sed -e 's/\(....\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3 \4:\5:\6/')
     if [[ -n "$V_FLAG" ]]; then
 	echo "next DateTimeOriginal: $NEXT_DateTimeOriginal next timestamp: $NEXT_TIMESTAMP" 1>&2
@@ -151,9 +258,9 @@ find . \( -iname '*.cr2' -o \
     # change the DateTimeOriginal of the current file
     #
     if [[ -n "$V_FLAG" ]]; then
-	echo "exiftool -quiet -overwrite_original -DateTimeOriginal='"$NEXT_DateTimeOriginal"' $file" 1>&2
+	echo "exiftool -quiet -overwrite_original -DateTimeOriginal=$NEXT_DateTimeOriginal $file" 1>&2
     fi
-    if [[ -z "$N_FLAG" ]]; then
+    if [[ -z "$NOOP" ]]; then
 	exiftool -quiet -overwrite_original -DateTimeOriginal="$NEXT_DateTimeOriginal" "$file"
 	status="$?"
 	if [[ "$status" -ne 0 ]]; then
@@ -166,6 +273,7 @@ find . \( -iname '*.cr2' -o \
     PREV_DateTimeOriginal="$NEXT_DateTimeOriginal"
     PREV_TIMESTAMP="$NEXT_TIMESTAMP"
 done
+
 
 # All Done!! - Jessica Noll, Age 2
 #

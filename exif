@@ -1,8 +1,8 @@
-#!/usr/bin/env perl -w
+#!/usr/bin/env perl
 #
 # exif - print EXIF information that may be in a file
 #
-# Copyright (c) 2005,2023 by Landon Curt Noll.  All Rights Reserved.
+# Copyright (c) 2005-2009,2012-2013,2023,2025 by Landon Curt Noll.  All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
@@ -22,91 +22,102 @@
 # OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 # PERFORMANCE OF THIS SOFTWARE.
 #
-# chongo (Landon Curt Noll, http://www.isthe.com/chongo/index.html) /\oo/\
+# chongo (Landon Curt Noll) /\oo/\
 #
-# Share and enjoy! :-)
+# http://www.isthe.com/chongo/index.html
+# https://github.com/lcn2
+#
+# Share and enjoy!  :-)
 
 # requirements
 #
 use strict;
 use bytes;
 use vars qw($opt_n $opt_m $opt_g $opt_i $opt_u $opt_b $opt_p @opt_t
-	    $opt_d $opt_e $opt_f $opt_h $opt_v);
-use Getopt::Long;
+	    $opt_d $opt_e $opt_f $opt_h $opt_v $opt_V);
+use Getopt::Long qw(:config no_ignore_case);
 use Image::ExifTool qw(ImageInfo);
+use File::Basename;
 
-# version - RCS style *and* usable by MakeMaker
+# version
 #
-my $VERSION = substr q$Revision: 1.8 $, 10;
-$VERSION =~ s/\s+$//;
+my $VERSION = "4.12.1 2025-04-03";
 
 # my vars
 #
+my $NAME = basename($0);
 my %expand;	# $expand{$i} is either $i or %xx hex expansion
 
 # usage and help
 #
 my $usage =
-    "$0 [-n][-m][-g][-i] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
-    "\t\t[-f fmt] [-h][-v lvl] imgfile ...";
+    "$NAME [-h][-v lvl][-V] [-n][-m][-g][-i] [-u][-b][-p] [-d][-e] [-t tag] ...\n" .
+    "\t\t[-f fmt] imgfile ...";
 my $help = qq{$usage
 
-	-n	output EXIF tag name before value (default: don't)
-	-m	output EXIF tag name instead of value (default: don't)
-	-g	output EXIF tag group before EXIF tag value (default: don't)
-	-i	output imgfile filename at start of line (default: don't)
+    -h      print this help message
+    -v      verbose / debug level
+    -V      print version and exit
 
-	-u	output unknown EXIF tags (default: don't)
-	-b	output binary values (implies -p) (default: print binary len)
-	-p	disable conversion (default: printable data, shorter lists)
+    -n      output EXIF tag name before value (default: don't)
+    -m      output EXIF tag name instead of value (default: don't)
+    -g      output EXIF tag group before EXIF tag value (default: don't)
+    -i      output imgfile filename at start of line (default: don't)
 
-	-d	output duplicate EXIF tag names (default: don't)
-	-e	output ExitTool tag names (defailt: output canonical names)
+    -u      output unknown EXIF tags (default: don't)
+    -b      output binary values (implies -p) (default: print binary len)
+    -p      disable conversion (default: printable data, shorter lists)
 
-	-t tag	only just EXIF tag (default: output any tag (see also -u))
-		    (NOTE: multiple -t tags are allowed)
+    -d      output duplicate EXIF tag names (default: don't)
+    -e      output ExitTool tag names (defailt: output canonical names)
 
-	-f fmt	format for date related strings (default: \%F \%T)
-		\%a short weekday name	\%A full weekday name
-		\%b short month name	\%B full month name
-		\%c default format	\%C 2 digit century
-		\%d day [01-31]		\%D \%m/\%d/\%y
-		\%e dat [ 1-31]		\%E locale modifier for cCxXyY
-					\%F \%Y-\%m-\%d (ISO 8601)
-		\%g 2 digit year of \%V\t\%G 4 digit year of \%V
-		\%h == \%b		\%H hour [00-23]
-					\%I hour [01-12]
-		\%j day of year [001-366]
-		\%k hour [0-23]
-		\%l hour [ 1-12]
-		\%m month [01-12]	\%M minute [00-59]
-		\%n \\n
-					\%O modifier for deHImMSuUVwWy
-		\%p AM or PM		\%P am or pm
-		\%r \%I:\%M:\%S \%p\t	\%R \%H:\%M
-		\%s seconds since Epoch	\%S seconds [00-61]
-		\%t \\t			\%T \%H:\%M:\%S
-		\%u day of week [1-7]	\%U week num [00-53] 1st Sun week 01
-					\%V week num [01-53] ISO 8601:1988
-		\%w day of week [0-6]	\%W week num [00-53] 1st Mon week 01
-		\%x locate date		\%X locate time
-		\%y year [00-99]	\%Y 4 digit year
-		\%z UTC timezone offset	\%Z time zone or name or abbreviation
-		\%+ date(1) format	\%\% \%
+    -t tag  only just EXIF tag (default: output any tag (see also -u))
+		(NOTE: multiple -t tags are allowed)
 
-	-h	print this help message
-	-v 	verbose / debug level
+    -f fmt  format for date related strings (default: \%F \%T)
 
-	imgfile ...	files to look for EXIF data
+	\%a short weekday name  \%A full weekday name
+	\%b short month name    \%B full month name
+	\%c default format      \%C 2 digit century
+	\%d day [01-31]         \%D \%m/\%d/\%y
+	\%e dat [ 1-31]         \%E locale modifier for cCxXyY
+				\%F \%Y-\%m-\%d (ISO 8601)
+	\%g 2 digit year of \%V\t\%G 4 digit year of \%V
+	\%h == \%b              \%H hour [00-23]
+				\%I hour [01-12]
+	\%j day of year [001-366]
+	\%k hour [0-23]
+	\%l hour [ 1-12]
+	\%m month [01-12]       \%M minute [00-59]
+	\%n \\n
+				\%O modifier for deHImMSuUVwWy
+	\%p AM or PM            \%P am or pm
+	\%r \%I:\%M:\%S \%p\t   \%R \%H:\%M
+	\%s seconds since Epoch \%S seconds [00-61]
+	\%t \\t                 \%T \%H:\%M:\%S
+	\%u day of week [1-7]   \%U week num [00-53] 1st Sun week 01
+				\%V week num [01-53] ISO 8601:1988
+	\%w day of week [0-6]   \%W week num [00-53] 1st Mon week 01
+	\%x locate date         \%X locate time
+	\%y year [00-99]        \%Y 4 digit year
+	\%z UTC timezone offset \%Z time zone or name or abbreviation
+	\%+ date(1) format      \%\% \%
 
-    NOTE:
-	exit 0	all is OK
-	exit 1	problems were encountered while extracting EXIF info
-	exit 2	cannot open or read filename
-	exit 3	fatal error during EXIF processing
-	exit >3 some other fatal error
-};
+    imgfile ...     files to look for EXIF data
+
+Exit codes:
+     0         all OK
+     1      `  problems were encountered while extracting EXIF info
+     2         cannot open or read filename
+     3         fatal error during EXIF processing
+ >= 10         internal error
+
+$NAME version: $VERSION};
 my %optctl = (
+    "h" => \$opt_h,
+    "v=i" => \$opt_v,
+    "V" => \$opt_V,
+
     "n" => \$opt_n,
     "m" => \$opt_m,
     "g" => \$opt_g,
@@ -122,9 +133,6 @@ my %optctl = (
     "t=s" => \@opt_t,
 
     "f=s" => \$opt_f,
-
-    "h" => \$opt_h,
-    "v=i" => \$opt_v,
 );
 
 
@@ -151,7 +159,9 @@ MAIN: {
 
     # set the defaults
     #
+    $opt_h = 0;
     $opt_v = 0;
+    $opt_V = 0;
 
     # parse args
     #
@@ -159,10 +169,14 @@ MAIN: {
 	print STDERR "$0: invalid command line\nusage:\n\t$help\n";
 	exit(4);
     }
-    if (defined $opt_h) {
+    if ($opt_h) {
 	# just print help, no error
-	print STDERR "$0: usage: $help\n";
+	print STDERR "$help\n";
 	exit(0);
+    }
+    if ($opt_V) {
+        print "$VERSION\n";
+        exit(0);
     }
     if (! defined $ARGV[0]) {
 	print STDERR "$0: missing filename\nusage:\n\t$help\n";

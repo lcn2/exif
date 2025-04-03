@@ -1,8 +1,8 @@
-#!/usr/bin/env perl -w
+#!/usr/bin/env perl
 #
 # exifrename - copy files based on EXIF or file time data
 #
-# Copyright (c) 2005-2006,2023 by Landon Curt Noll.	All Rights Reserved.
+# Copyright (c) 2005-2009,2012-2013,2023,2025 by Landon Curt Noll.  All Rights Reserved.
 #
 # Permission to use, copy, modify, and distribute this software and
 # its documentation for any purpose and without fee is hereby granted,
@@ -22,17 +22,20 @@
 # OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 # PERFORMANCE OF THIS SOFTWARE.
 #
-# chongo (Landon Curt Noll, http://www.isthe.com/chongo/index.html) /\oo/\
+# chongo (Landon Curt Noll) /\oo/\
 #
-# Share and enjoy! :-)
+# http://www.isthe.com/chongo/index.html
+# https://github.com/lcn2
+#
+# Share and enjoy!  :-)
 
 # requirements
 #
 use strict;
 use bytes;
 use vars qw($opt_h $opt_v $opt_o $opt_m $opt_t $opt_c $opt_a $opt_e
-	    $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k $opt_d $opt_u);
-use Getopt::Long;
+	    $opt_s $opt_r $opt_n $opt_y $opt_z $opt_k $opt_d $opt_u $opt_V);
+use Getopt::Long qw(:config no_ignore_case);
 use Image::ExifTool qw(ImageInfo);
 use POSIX qw(strftime);
 use File::Find;
@@ -47,6 +50,14 @@ use Cwd qw(abs_path);
 #
 my $VERSION = substr q$Revision: 4.12 $, 10;
 $VERSION =~ s/\s+$//;
+
+# version
+#
+my $VERSION = "4.12.1 2025-04-03";
+
+# my vars
+#
+my $NAME = basename($0);
 
 # my vars
 #
@@ -167,10 +178,13 @@ my $mintime = 500000000;
 
 # usage and help
 #
-my $usage = "$0 [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n".
+my $usage = "$0 [-h][-v lvl][-V] [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]\n".
     "  [-o] [-r readme] [-s roll_sublen] [-t] [-u] [-y seqlen] [-z skchars]\n" .
-    "  [-h] [-d] [-v lvl] srcdir destdir";
+    "  [-d] srcdir destdir";
 my $help = qq{\n$usage
+    -h		 print this help message
+    -v lvl	 set verbose / debug level to lvl (def: 0)
+    -V		 print version and exit
 
     -a		 don't abort/exit after post-setup fatal errors (def: do)
     -c		 don't verify/compare files after they are copied (def: do)
@@ -186,9 +200,7 @@ my $help = qq{\n$usage
     -y seqlen	 sequence length, image filename chars after skchars (def: 4)
     -z skchars	 initial image-name chars not part of sequence number (def: 4)
 
-    -h		 print this help message
     -d		 do nothing / "dry run", do not create/alter any file (def: do)
-    -v lvl	 set verbose / debug level to lvl (def: 0)
 
     srcdir	 source directory (must exist)
     destdir	 destination directory (must exist)
@@ -211,6 +223,7 @@ my %optctl = (
     "s=i" => \$opt_s,
     "u" => \$opt_u,
     "v=i" => \$opt_v,
+    "V" => \$opt_V,
     "y=i" => \$opt_y,
     "z=i" => \$opt_z,
 );
@@ -252,7 +265,9 @@ MAIN:
 
     # set the defaults
     #
+    $opt_h = 0;
     $opt_v = 0;
+    $opt_V = 0;
     $ENV{HOME} = "/" unless defined $ENV{HOME};
     # must be in UTC timezone so that filename timestamps work correctly!
     $ENV{TZ} = "UTC";
@@ -349,10 +364,14 @@ sub parse_args()
 	print STDERR "$0: usage: $help\n";
 	error(1, "invalid command line");
     }
-    if (defined $opt_h) {
+    if ($opt_h) {
 	# just print help, no error
 	print STDERR "$0: usage: $help\n";
 	exit(0);
+    }
+    if ($opt_V) {
+        print "$VERSION\n";
+        exit(0);
     }
 
     # sanity checks on options
