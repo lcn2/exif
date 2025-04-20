@@ -18,7 +18,7 @@ sudo make install
 
 ## exif
 
-```sh
+```
 /usr/local/bin/exif [-h][-v lvl][-V] [-n][-m][-g][-i] [-u][-b][-p] [-d][-e] [-t tag] ...
 		[-f fmt] imgfile ...
 
@@ -85,7 +85,7 @@ exif version: 4.12.1 2025-04-03
 
 ## exifforceorder
 
-```sh
+```
 /usr/local/bin/exifforceorder [-h] [-v level] [-V] [-n] [-N] [-o arg] [-d] [-f] dir
 
     -h          print help message and exit
@@ -115,7 +115,7 @@ exifforceorder version: 4.12.1 2025-04-03
 
 ## exifrename
 
-```sh
+```
 /usr/local/bin//exifrename [-h][-v lvl][-V] [-a] [-c] [-e exifroll] [-k roll_subskip] [-m] [-n rollnum]
   [-o] [-r readme] [-s roll_sublen] [-t] [-u] [-y seqlen] [-z skchars]
   [-d] srcdir destdir
