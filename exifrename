@@ -2591,7 +2591,7 @@ sub set_timestamps()
 }
 
 
-# forget_path - forget that we saw a path, remove it from all hashs
+# forget_path - forget that we saw a path, remove it from all hashes
 #
 # given:
 #	$basename_noext		# basename without .extension to ignore
